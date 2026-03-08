@@ -50,6 +50,8 @@ export async function GET(request: NextRequest) {
     const status = sp.get("status") ?? "all";
     const locationId = sp.get("location_id") ?? "";
     const search = (sp.get("search") ?? "").trim().toLowerCase();
+    const priceRange = sp.get("price_range") ?? "all";
+    const availability = sp.get("availability") ?? "all";
 
     const productQuery = new URLSearchParams();
     if (categoryId && categoryId !== "all") productQuery.set("category_id", categoryId);
@@ -102,6 +104,30 @@ export async function GET(request: NextRequest) {
         const name = (product.name ?? "").toLowerCase();
         const sku = (product.sku ?? "").toLowerCase();
         return name.includes(search) || sku.includes(search);
+      });
+    }
+
+    const getPrice = (raw: string | null | undefined) => {
+      if (!raw) return null;
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+
+    if (availability === "with_price") {
+      products = products.filter((product) => getPrice(product.base_price) !== null);
+    } else if (availability === "no_price") {
+      products = products.filter((product) => getPrice(product.base_price) === null);
+    }
+
+    if (priceRange !== "all") {
+      products = products.filter((product) => {
+        const price = getPrice(product.base_price);
+        if (price === null) return false;
+        if (priceRange === "0-10") return price >= 0 && price <= 10;
+        if (priceRange === "10-20") return price > 10 && price <= 20;
+        if (priceRange === "20-50") return price > 20 && price <= 50;
+        if (priceRange === "50+") return price > 50;
+        return true;
       });
     }
 

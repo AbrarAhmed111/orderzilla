@@ -7,6 +7,8 @@ import toast from "react-hot-toast";
 import RowActionMenu from "@/components/dashboard/ui/RowActionMenu";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
+import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
+import { validateField } from "@/lib/validation";
 import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api";
 import type { components } from "@/types/orderzilla-openapi";
@@ -35,6 +37,37 @@ type LocationsTableResponse = {
   };
 };
 
+const ISO_COUNTRY_CODES = [
+  "AD", "AE", "AF", "AG", "AI", "AL", "AM", "AO", "AQ", "AR", "AS", "AT", "AU", "AW", "AX", "AZ",
+  "BA", "BB", "BD", "BE", "BF", "BG", "BH", "BI", "BJ", "BL", "BM", "BN", "BO", "BQ", "BR", "BS",
+  "BT", "BV", "BW", "BY", "BZ", "CA", "CC", "CD", "CF", "CG", "CH", "CI", "CK", "CL", "CM", "CN",
+  "CO", "CR", "CU", "CV", "CW", "CX", "CY", "CZ", "DE", "DJ", "DK", "DM", "DO", "DZ", "EC", "EE",
+  "EG", "EH", "ER", "ES", "ET", "FI", "FJ", "FK", "FM", "FO", "FR", "GA", "GB", "GD", "GE", "GF",
+  "GG", "GH", "GI", "GL", "GM", "GN", "GP", "GQ", "GR", "GS", "GT", "GU", "GW", "GY", "HK", "HM",
+  "HN", "HR", "HT", "HU", "ID", "IE", "IL", "IM", "IN", "IO", "IQ", "IR", "IS", "IT", "JE", "JM",
+  "JO", "JP", "KE", "KG", "KH", "KI", "KM", "KN", "KP", "KR", "KW", "KY", "KZ", "LA", "LB", "LC",
+  "LI", "LK", "LR", "LS", "LT", "LU", "LV", "LY", "MA", "MC", "MD", "ME", "MF", "MG", "MH", "MK",
+  "ML", "MM", "MN", "MO", "MP", "MQ", "MR", "MS", "MT", "MU", "MV", "MW", "MX", "MY", "MZ", "NA",
+  "NC", "NE", "NF", "NG", "NI", "NL", "NO", "NP", "NR", "NU", "NZ", "OM", "PA", "PE", "PF", "PG",
+  "PH", "PK", "PL", "PM", "PN", "PR", "PS", "PT", "PW", "PY", "QA", "RE", "RO", "RS", "RU", "RW",
+  "SA", "SB", "SC", "SD", "SE", "SG", "SH", "SI", "SJ", "SK", "SL", "SM", "SN", "SO", "SR", "SS",
+  "ST", "SV", "SX", "SY", "SZ", "TC", "TD", "TF", "TG", "TH", "TJ", "TK", "TL", "TM", "TN", "TO",
+  "TR", "TT", "TV", "TW", "TZ", "UA", "UG", "UM", "US", "UY", "UZ", "VA", "VC", "VE", "VG", "VI",
+  "VN", "VU", "WF", "WS", "YE", "YT", "ZA", "ZM", "ZW",
+];
+
+const countryDisplay = new Intl.DisplayNames(["en"], { type: "region" });
+const COUNTRY_OPTIONS = ISO_COUNTRY_CODES.map((code) => ({
+  value: code,
+  label: `${countryDisplay.of(code) ?? code} (${code})`,
+}));
+
+const FALLBACK_TIMEZONES = ["UTC", "Europe/Zurich", "Europe/Berlin", "Europe/London", "America/New_York", "Asia/Dubai"];
+const TIMEZONE_OPTIONS = (
+  (Intl as typeof Intl & { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.("timeZone") ??
+  FALLBACK_TIMEZONES
+).map((zone) => ({ value: zone, label: zone }));
+
 export default function LocationsPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -57,8 +90,17 @@ export default function LocationsPage() {
     useState(Number.isFinite(initialLimit) && initialLimit > 0 ? initialLimit : 10);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
-  const [assignCategory, setAssignCategory] = useState("CH");
+  const [assignCountry, setAssignCountry] = useState("CH");
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteIds, setDeleteIds] = useState<string[]>([]);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createAddress, setCreateAddress] = useState("");
+  const [createCity, setCreateCity] = useState("");
+  const [createCountry, setCreateCountry] = useState("CH");
+  const [createTimezone, setCreateTimezone] = useState("Europe/Zurich");
 
   const mapLocation = (location: ApiLocation): LocationRow => ({
     id: location.id ?? crypto.randomUUID(),
@@ -148,9 +190,9 @@ export default function LocationsPage() {
       setIsBulkUpdating(true);
       const targets = rows.filter((row) => selectedIds.includes(row.id));
       await Promise.all(targets.map((row) => updateRow(row, { active })));
-      setRows((prev) => prev.map((row) => (selectedIds.includes(row.id) ? { ...row, active } : row)));
       setSelectedIds([]);
       toast.success(`Updated ${targets.length} locations.`);
+      await fetchLocations();
     } catch {
       toast.error("Failed to update locations.");
     } finally {
@@ -158,25 +200,37 @@ export default function LocationsPage() {
     }
   };
 
-  const bulkDelete = async () => {
+  const openDeleteModal = (ids: string[]) => {
+    setDeleteIds(ids);
+    setIsDeleteModalOpen(true);
+  };
+
+  const bulkDelete = () => {
     if (selectedIds.length === 0) {
       toast("Select locations first.");
       return;
     }
+    openDeleteModal(selectedIds);
+  };
+
+  const confirmDelete = async () => {
+    if (deleteIds.length === 0) return;
     try {
       setIsBulkUpdating(true);
-      await Promise.all(selectedIds.map((id) => orderzillaApi.dashboard.locations.remove(id)));
-      setRows((prev) => prev.filter((row) => !selectedIds.includes(row.id)));
+      await Promise.all(deleteIds.map((id) => orderzillaApi.dashboard.locations.remove(id)));
       setSelectedIds([]);
-      toast.success("Selected locations deleted.");
+      toast.success(deleteIds.length === 1 ? "Location deleted." : "Selected locations deleted.");
+      setDeleteIds([]);
+      setIsDeleteModalOpen(false);
+      await fetchLocations();
     } catch {
-      toast.error("Failed to delete selected locations.");
+      toast.error(deleteIds.length === 1 ? "Failed to delete location." : "Failed to delete selected locations.");
     } finally {
       setIsBulkUpdating(false);
     }
   };
 
-  const assignCategoryToSelected = async () => {
+  const assignCountryToSelected = async () => {
     if (selectedIds.length === 0) {
       toast("Select locations first.");
       return;
@@ -184,36 +238,53 @@ export default function LocationsPage() {
     try {
       setIsBulkUpdating(true);
       const targets = rows.filter((row) => selectedIds.includes(row.id));
-      await Promise.all(targets.map((row) => updateRow(row, { country: assignCategory })));
-      setRows((prev) =>
-        prev.map((row) => (selectedIds.includes(row.id) ? { ...row, country: assignCategory } : row)),
-      );
+      await Promise.all(targets.map((row) => updateRow(row, { country: assignCountry })));
       setSelectedIds([]);
-      toast.success(`Assigned category ${assignCategory} to selected locations.`);
+      toast.success(`Assigned country ${assignCountry} to selected locations.`);
+      await fetchLocations();
     } catch {
-      toast.error("Failed to assign category.");
+      toast.error("Failed to assign country.");
     } finally {
       setIsBulkUpdating(false);
     }
   };
 
+  const resetCreateForm = () => {
+    setCreateName("");
+    setCreateAddress("");
+    setCreateCity("");
+    setCreateCountry("CH");
+    setCreateTimezone("Europe/Zurich");
+  };
+
+  const createLocationNameError = validateField(createName, [
+    { type: "required", message: "Location name is required." },
+    { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+  ]);
+  const isCreateLocationFormValid = !createLocationNameError;
+
   const createLocation = async () => {
-    const name = window.prompt("Location name");
-    if (!name) return;
-    const city = window.prompt("City", "Zurich") ?? "Zurich";
+    if (!isCreateLocationFormValid) return;
+    const trimmedName = createName.trim();
     try {
+      setIsBulkUpdating(true);
       await orderzillaApi.dashboard.locations.create({
         body: {
-          name: name.trim(),
-          city,
-          country: "CH",
-          timezone: "Europe/Zurich",
+          name: trimmedName,
+          address: createAddress.trim() || undefined,
+          city: createCity.trim() || undefined,
+          country: createCountry.trim() || "CH",
+          timezone: createTimezone.trim() || "Europe/Zurich",
         },
       });
       toast.success("Location created.");
-      fetchLocations();
+      setIsCreateModalOpen(false);
+      resetCreateForm();
+      await fetchLocations();
     } catch {
       toast.error("Failed to create location.");
+    } finally {
+      setIsBulkUpdating(false);
     }
   };
 
@@ -275,7 +346,7 @@ export default function LocationsPage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => importRef.current?.click()}
+              onClick={() => setIsImportModalOpen(true)}
               className="h-10 rounded-lg border border-[#e4e6ea] bg-white px-4 text-[13px] font-semibold text-[#414855]"
             >
               Import
@@ -287,12 +358,15 @@ export default function LocationsPage() {
               className="hidden"
               onChange={(event) => {
                 const file = event.target.files?.[0];
-                if (file) importLocations(file);
+                if (file) {
+                  setIsImportModalOpen(false);
+                  importLocations(file);
+                }
               }}
             />
             <button
               type="button"
-              onClick={createLocation}
+              onClick={() => setIsCreateModalOpen(true)}
               className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[13px] font-semibold text-[#1d2512]"
             >
               + Add Location
@@ -313,6 +387,8 @@ export default function LocationsPage() {
           <div className="h-9 flex-1 rounded-lg border border-[#e4e6ea] bg-white px-3 flex items-center gap-2">
             <Search size={15} className="text-[#97a0ad]" />
             <input
+              type="search"
+              autoComplete="off"
               placeholder="Search by location, city, or country"
               value={search}
               onChange={(e) => {
@@ -418,12 +494,8 @@ export default function LocationsPage() {
                               onClick: async () => {
                                 try {
                                   await updateRow(location, { active: !location.active });
-                                  setRows((prev) =>
-                                    prev.map((row) =>
-                                      row.id === location.id ? { ...row, active: !row.active } : row,
-                                    ),
-                                  );
                                   toast.success("Location updated.");
+                                  await fetchLocations();
                                 } catch {
                                   toast.error("Failed to update location.");
                                 }
@@ -432,14 +504,8 @@ export default function LocationsPage() {
                             {
                               label: "Delete location",
                               danger: true,
-                              onClick: async () => {
-                                try {
-                                  await orderzillaApi.dashboard.locations.remove(location.id);
-                                  setRows((prev) => prev.filter((row) => row.id !== location.id));
-                                  toast.success("Location deleted.");
-                                } catch {
-                                  toast.error("Failed to delete location.");
-                                }
+                              onClick: () => {
+                                openDeleteModal([location.id]);
                               },
                             },
                           ]}
@@ -473,26 +539,26 @@ export default function LocationsPage() {
               Deactivate
             </button>
             <SelectMenu
-              value={assignCategory}
-              onChange={setAssignCategory}
+              value={assignCountry}
+              onChange={setAssignCountry}
               options={[
-                { label: "CH Category", value: "CH" },
-                { label: "DE Category", value: "DE" },
-                { label: "FR Category", value: "FR" },
+                { label: "Country: CH", value: "CH" },
+                { label: "Country: DE", value: "DE" },
+                { label: "Country: FR", value: "FR" },
               ]}
               className="min-w-[150px]"
             />
             <button
               type="button"
               disabled={isBulkUpdating}
-              onClick={assignCategoryToSelected}
+              onClick={assignCountryToSelected}
               className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#3f4653]"
             >
-              Assign Category
+              Assign Country
             </button>
             <button
               type="button"
-              onClick={createLocation}
+              onClick={() => setIsCreateModalOpen(true)}
               className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#3f4653]"
             >
               Create Location
@@ -528,6 +594,172 @@ export default function LocationsPage() {
           }}
         />
       </section>
+
+      {isImportModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[640px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Import Locations CSV</h2>
+            <p className="mt-1 text-[13px] text-[#6e7785]">
+              Please make sure your CSV includes the required columns before upload.
+            </p>
+
+            <div className="mt-4 rounded-lg border border-[#e4e6ea] bg-[#fafbfc] p-3 text-[13px]">
+              <p className="font-semibold text-[#2f3743]">Required</p>
+              <p className="mt-1 text-[#4f5a69]">
+                <code>name</code>
+              </p>
+              <p className="mt-3 font-semibold text-[#2f3743]">Optional</p>
+              <p className="mt-1 text-[#4f5a69]">
+                <code>address</code>, <code>city</code>, <code>country</code>, <code>timezone</code>
+              </p>
+              <p className="mt-3 font-semibold text-[#2f3743]">Example header</p>
+              <p className="mt-1 text-[#4f5a69] break-all">name,address,city,country,timezone</p>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(false)}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => importRef.current?.click()}
+                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512]"
+              >
+                Choose CSV File
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isDeleteModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[520px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">
+              {deleteIds.length === 1 ? "Delete Location" : "Delete Locations"}
+            </h2>
+            <p className="mt-2 text-[13px] text-[#6e7785]">
+              {deleteIds.length === 1
+                ? "Are you sure you want to delete this location? This action cannot be undone."
+                : `Are you sure you want to delete ${deleteIds.length} selected locations? This action cannot be undone.`}
+            </p>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={isBulkUpdating}
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setDeleteIds([]);
+                }}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isBulkUpdating}
+                onClick={confirmDelete}
+                className="h-9 rounded-lg bg-[#ef4a4c] px-4 text-[12px] font-semibold text-white disabled:opacity-50"
+              >
+                {isBulkUpdating ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isCreateModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[560px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[22px] font-bold text-[#1a212c]">Create Location</h2>
+            <p className="mt-1 text-[13px] text-[#6e7785]">
+              Fill all required fields to add a new location.
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="text-[13px] font-semibold text-[#4e5664]">Name *</label>
+                <ValidatedInput
+                  autoComplete="off"
+                  value={createName}
+                  onChange={setCreateName}
+                  rules={[
+                    { type: "required", message: "Location name is required." },
+                    { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+                  ]}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px] outline-none focus:border-[#c0eb1a]"
+                  placeholder="e.g. Downtown Branch"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="text-[13px] font-semibold text-[#4e5664]">Address</label>
+                <input
+                  autoComplete="off"
+                  value={createAddress}
+                  onChange={(e) => setCreateAddress(e.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                  placeholder="Street and number"
+                />
+              </div>
+              <div>
+                <label className="text-[13px] font-semibold text-[#4e5664]">City</label>
+                <input
+                  autoComplete="off"
+                  value={createCity}
+                  onChange={(e) => setCreateCity(e.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                  placeholder="Zurich"
+                />
+              </div>
+              <div>
+                <label className="text-[13px] font-semibold text-[#4e5664]">Country</label>
+                <div className="mt-1">
+                  <SelectMenu
+                    value={createCountry}
+                    onChange={setCreateCountry}
+                    options={COUNTRY_OPTIONS}
+                    className="w-full"
+                  />
+                </div>
+              </div>
+              <div className="col-span-2">
+                <label className="text-[13px] font-semibold text-[#4e5664]">Timezone</label>
+                <div className="mt-1">
+                  <SelectMenu
+                    value={createTimezone}
+                    onChange={setCreateTimezone}
+                    options={TIMEZONE_OPTIONS}
+                    className="w-full"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreateModalOpen(false);
+                  resetCreateForm();
+                }}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isBulkUpdating || !isCreateLocationFormValid}
+                onClick={createLocation}
+                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
+              >
+                {isBulkUpdating ? "Saving..." : "Create Location"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

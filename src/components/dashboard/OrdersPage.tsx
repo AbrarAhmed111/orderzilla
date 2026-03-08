@@ -537,7 +537,7 @@ export default function OrdersPage() {
   };
 
   const handleNewOrder = () => {
-    toast.error("Create order endpoint is not available in current API spec.");
+    router.push("/dashboard/endpoints-missing");
   };
 
   const deleteSelected = () => {
@@ -650,6 +650,8 @@ export default function OrdersPage() {
             <div className="h-9 flex-1 rounded-lg border border-[#e4e6ea] bg-white px-3 flex items-center gap-2">
               <Search size={15} className="text-[#97a0ad]" />
               <input
+                type="search"
+                autoComplete="off"
                 placeholder="Search by Order ID or customer"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}

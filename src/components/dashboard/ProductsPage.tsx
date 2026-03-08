@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronDown, MapPin, Search, Tag } from "lucide-react";
+import { MapPin, Search, Tag } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import toast from "react-hot-toast";
@@ -78,6 +78,8 @@ export default function ProductsPage() {
   const initialCategory = searchParams.get("category") ?? "all";
   const initialStatus = searchParams.get("status") ?? "all";
   const initialLocation = searchParams.get("location") ?? "all";
+  const initialPriceRange = searchParams.get("price_range") ?? "all";
+  const initialAvailability = searchParams.get("availability") ?? "all";
   const initialPage = Number(searchParams.get("page") ?? "1");
   const initialLimit = Number(searchParams.get("limit") ?? "20");
 
@@ -90,6 +92,8 @@ export default function ProductsPage() {
   const [categoryFilter, setCategoryFilter] = useState(initialCategory);
   const [statusFilter, setStatusFilter] = useState(initialStatus);
   const [locationFilter, setLocationFilter] = useState(initialLocation);
+  const [priceRangeFilter, setPriceRangeFilter] = useState(initialPriceRange);
+  const [availabilityFilter, setAvailabilityFilter] = useState(initialAvailability);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [page, setPage] = useState(Number.isFinite(initialPage) && initialPage > 0 ? initialPage : 1);
   const [pageSize, setPageSize] =
@@ -98,6 +102,7 @@ export default function ProductsPage() {
   const [totalItems, setTotalItems] = useState(0);
   const [assignCategoryId, setAssignCategoryId] = useState("all");
   const [isBulkActionLoading, setIsBulkActionLoading] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   const mapProduct = (item: ApiProduct): ProductRow => ({
     id: item.id ?? crypto.randomUUID(),
@@ -119,6 +124,8 @@ export default function ProductsPage() {
     if (categoryFilter !== "all") params.set("category_id", categoryFilter);
     if (statusFilter !== "all") params.set("status", statusFilter);
     if (locationFilter !== "all") params.set("location_id", locationFilter);
+    if (priceRangeFilter !== "all") params.set("price_range", priceRangeFilter);
+    if (availabilityFilter !== "all") params.set("availability", availabilityFilter);
     params.set("page", String(page));
     params.set("limit", String(pageSize));
     return params;
@@ -158,7 +165,7 @@ export default function ProductsPage() {
 
   useEffect(() => {
     fetchProducts();
-  }, [page, pageSize, search, categoryFilter, statusFilter, locationFilter]);
+  }, [page, pageSize, search, categoryFilter, statusFilter, locationFilter, priceRangeFilter, availabilityFilter]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -166,13 +173,15 @@ export default function ProductsPage() {
     if (categoryFilter !== "all") params.set("category", categoryFilter);
     if (statusFilter !== "all") params.set("status", statusFilter);
     if (locationFilter !== "all") params.set("location", locationFilter);
+    if (priceRangeFilter !== "all") params.set("price_range", priceRangeFilter);
+    if (availabilityFilter !== "all") params.set("availability", availabilityFilter);
     if (page !== 1) params.set("page", String(page));
     if (pageSize !== 20) params.set("limit", String(pageSize));
     const nextQuery = params.toString();
     if (nextQuery !== searchParams.toString()) {
       router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
     }
-  }, [search, categoryFilter, statusFilter, locationFilter, page, pageSize, pathname, router, searchParams]);
+  }, [search, categoryFilter, statusFilter, locationFilter, priceRangeFilter, availabilityFilter, page, pageSize, pathname, router, searchParams]);
 
   const paginatedRows = useMemo(() => rows, [rows]);
   const currentPage = Math.min(page, Math.max(1, totalPages));
@@ -216,14 +225,34 @@ export default function ProductsPage() {
       toast("Select products first.");
       return;
     }
+    if (!window.confirm(`Delete ${selectedIds.length} selected product(s)?`)) {
+      return;
+    }
     try {
       setIsBulkActionLoading(true);
       await Promise.all(selectedIds.map((id) => orderzillaApi.dashboard.products.remove(id)));
       toast.success(`Deleted ${selectedIds.length} products.`);
       setSelectedIds([]);
-      fetchProducts();
+      await fetchProducts();
     } catch {
       toast.error("Failed to delete products.");
+    } finally {
+      setIsBulkActionLoading(false);
+    }
+  };
+
+  const deleteSingleProduct = async (id: string) => {
+    if (!window.confirm("Delete this product?")) {
+      return;
+    }
+    try {
+      setIsBulkActionLoading(true);
+      await orderzillaApi.dashboard.products.remove(id);
+      setSelectedIds((prev) => prev.filter((selectedId) => selectedId !== id));
+      toast.success("Product deleted.");
+      await fetchProducts();
+    } catch {
+      toast.error("Failed to delete product.");
     } finally {
       setIsBulkActionLoading(false);
     }
@@ -372,7 +401,7 @@ export default function ProductsPage() {
             />
             <button
               type="button"
-              onClick={() => importRef.current?.click()}
+              onClick={() => setIsImportModalOpen(true)}
               disabled={isBulkActionLoading}
               className="h-9 rounded-lg border border-[#e4e6ea] bg-white px-4 text-[12px] font-semibold text-[#414855]"
             >
@@ -385,12 +414,15 @@ export default function ProductsPage() {
               className="hidden"
               onChange={(event) => {
                 const file = event.target.files?.[0];
-                if (file) importProducts(file);
+                if (file) {
+                  setIsImportModalOpen(false);
+                  importProducts(file);
+                }
               }}
             />
             <button
               type="button"
-              onClick={() => toast("Create product page is not available yet.")}
+              onClick={() => router.push("/dashboard/products/create-product")}
               className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512]"
             >
               + Add Product
@@ -411,6 +443,8 @@ export default function ProductsPage() {
           <div className="h-9 flex-1 rounded-lg border border-[#e4e6ea] bg-white px-3 flex items-center gap-2">
             <Search size={15} className="text-[#97a0ad]" />
             <input
+              type="search"
+              autoComplete="off"
               placeholder="Search by product name or SKU"
               value={search}
               onChange={(e) => {
@@ -435,20 +469,34 @@ export default function ProductsPage() {
               ]}
               className="min-w-[130px]"
             />
-            <button
-              type="button"
-              className="h-9 rounded-lg border border-[#e4e6ea] bg-white px-3 inline-flex items-center gap-2 text-[12px] font-medium text-[#424a56]"
-            >
-              <span>Price range</span>
-              <ChevronDown size={13} />
-            </button>
-            <button
-              type="button"
-              className="h-9 rounded-lg border border-[#e4e6ea] bg-white px-3 inline-flex items-center gap-2 text-[12px] font-medium text-[#424a56]"
-            >
-              <span>Availability</span>
-              <ChevronDown size={13} />
-            </button>
+            <SelectMenu
+              value={priceRangeFilter}
+              onChange={(value) => {
+                setPriceRangeFilter(value);
+                setPage(1);
+              }}
+              options={[
+                { label: "All Prices", value: "all" },
+                { label: "0 - 10", value: "0-10" },
+                { label: "10 - 20", value: "10-20" },
+                { label: "20 - 50", value: "20-50" },
+                { label: "50+", value: "50+" },
+              ]}
+              className="min-w-[120px]"
+            />
+            <SelectMenu
+              value={availabilityFilter}
+              onChange={(value) => {
+                setAvailabilityFilter(value);
+                setPage(1);
+              }}
+              options={[
+                { label: "All Availability", value: "all" },
+                { label: "With Price", value: "with_price" },
+                { label: "No Price", value: "no_price" },
+              ]}
+              className="min-w-[140px]"
+            />
             <button
               type="button"
               onClick={() => {
@@ -456,6 +504,8 @@ export default function ProductsPage() {
                 setCategoryFilter("all");
                 setStatusFilter("all");
                 setLocationFilter("all");
+                setPriceRangeFilter("all");
+                setAvailabilityFilter("all");
                 setPage(1);
               }}
               className="text-[12px] font-semibold text-[#6385b5] ml-1"
@@ -508,7 +558,7 @@ export default function ProductsPage() {
                 ) : (
                   paginatedRows.map((product, index) => (
                     <tr
-                      key={product.id}
+                      key={`${product.id}-${index}`}
                       className={`border-b last:border-b-0 border-[#edf0f4] text-[13px] ${
                         index === 1 || index === 3 ? "bg-[#f6f7f9]" : "bg-white"
                       }`}
@@ -629,15 +679,7 @@ export default function ProductsPage() {
                             {
                               label: "Delete product",
                               danger: true,
-                              onClick: async () => {
-                                try {
-                                  await orderzillaApi.dashboard.products.remove(product.id);
-                                  setRows((prev) => prev.filter((row) => row.id !== product.id));
-                                  toast.success("Product deleted.");
-                                } catch {
-                                  toast.error("Failed to delete product.");
-                                }
-                              },
+                              onClick: async () => deleteSingleProduct(product.id),
                             },
                           ]}
                         />
@@ -727,6 +769,50 @@ export default function ProductsPage() {
           }}
         />
       </section>
+
+      {isImportModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[640px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Import Products CSV</h2>
+            <p className="mt-1 text-[13px] text-[#6e7785]">
+              Please make sure your CSV includes the required columns before upload.
+            </p>
+
+            <div className="mt-4 rounded-lg border border-[#e4e6ea] bg-[#fafbfc] p-3 text-[13px]">
+              <p className="font-semibold text-[#2f3743]">Required</p>
+              <p className="mt-1 text-[#4f5a69]">
+                <code>name</code>
+              </p>
+              <p className="mt-3 font-semibold text-[#2f3743]">Optional</p>
+              <p className="mt-1 text-[#4f5a69]">
+                <code>sku</code>, <code>category_id</code>, <code>category_name</code>,{" "}
+                <code>tax_rate</code>
+              </p>
+              <p className="mt-3 font-semibold text-[#2f3743]">Example header</p>
+              <p className="mt-1 text-[#4f5a69] break-all">
+                name,sku,category_id,category_name,tax_rate
+              </p>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(false)}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => importRef.current?.click()}
+                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512]"
+              >
+                Choose CSV File
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

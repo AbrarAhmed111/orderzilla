@@ -1,72 +1,124 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
+import SelectMenu from "@/components/dashboard/ui/SelectMenu";
 import { orderzillaApi } from "@/lib/api";
 
 type TerminalDetailFunctionsPageProps = {
   id: string;
 };
 
-function Toggle({ on }: { on: boolean }) {
-  return (
-    <span
-      className={`relative inline-flex h-7 w-12 items-center rounded-full border transition ${
-        on ? "bg-[#d7ff3f] border-[#c9f339]" : "bg-[#eceef2] border-[#dde2ea]"
-      }`}
-    >
-      <span
-        className={`h-5 w-5 rounded-full bg-white shadow-sm transition ${
-          on ? "translate-x-6" : "translate-x-1"
-        }`}
-      />
-    </span>
-  );
-}
+type ApiTerminal = {
+  name?: string;
+  location_name?: string;
+  mode?: "INDOOR" | "TAKEAWAY";
+  is_active?: boolean;
+  printer_host?: string | null;
+  printer_port?: number;
+  printer_width?: number;
+};
 
-function ToggleRow({ label, on }: { label: string; on: boolean }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-[16px] font-semibold text-[#2f3743]">{label}</span>
-      <Toggle on={on} />
-    </div>
-  );
-}
-
-function FunctionCard({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-      <h2 className="text-[31px] font-bold text-[#1a212c]">{title}</h2>
-      <div className="mt-3 space-y-2">{children}</div>
-    </article>
-  );
-}
+const commandOptions = [
+  { label: "Reload Menu", value: "RELOAD_MENU" },
+  { label: "Show Message", value: "SHOW_MESSAGE" },
+  { label: "Maintenance Mode", value: "MAINTENANCE_MODE" },
+  { label: "Clear Maintenance", value: "CLEAR_MAINTENANCE" },
+];
 
 export default function TerminalDetailFunctionsPage({
   id,
 }: TerminalDetailFunctionsPageProps) {
-  const [terminalName, setTerminalName] = useState(`Terminal #${id.toUpperCase()}`);
+  const [terminal, setTerminal] = useState<ApiTerminal | null>(null);
+  const [terminalName, setTerminalName] = useState(`Terminal #${id.slice(0, 6).toUpperCase()}`);
   const [locationName, setLocationName] = useState("Location");
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+
+  const [mode, setMode] = useState<"INDOOR" | "TAKEAWAY">("INDOOR");
+  const [isActive, setIsActive] = useState(true);
+  const [printerHost, setPrinterHost] = useState("");
+  const [printerPort, setPrinterPort] = useState("9100");
+  const [printerWidth, setPrinterWidth] = useState("80");
+  const [command, setCommand] = useState("RELOAD_MENU");
+  const [message, setMessage] = useState("");
+
+  const syncForm = (data: ApiTerminal) => {
+    setMode(data.mode ?? "INDOOR");
+    setIsActive(data.is_active ?? true);
+    setPrinterHost(data.printer_host ?? "");
+    setPrinterPort(String(data.printer_port ?? 9100));
+    setPrinterWidth(String(data.printer_width ?? 80));
+  };
 
   useEffect(() => {
     const run = async () => {
-      setIsLoading(true);
-      const terminal = await orderzillaApi.dashboard.terminals.byId(id);
-      setTerminalName(terminal?.name ?? `Terminal #${id.toUpperCase()}`);
-      setLocationName(terminal?.location_name ?? "Location");
-      setIsLoading(false);
+      try {
+        setIsLoading(true);
+        const response = (await orderzillaApi.dashboard.terminals.byId(id)) as ApiTerminal;
+        setTerminal(response);
+        setTerminalName(response?.name ?? `Terminal #${id.slice(0, 6).toUpperCase()}`);
+        setLocationName(response?.location_name ?? "Location");
+        syncForm(response);
+      } catch {
+        toast.error("Failed to load terminal.");
+      } finally {
+        setIsLoading(false);
+      }
     };
     run();
   }, [id]);
+
+  const saveSettings = async () => {
+    try {
+      setIsSaving(true);
+      await orderzillaApi.dashboard.terminals.update(id, {
+        body: {
+          mode,
+          is_active: isActive,
+          printer_host: printerHost.trim() || undefined,
+          printer_port: Number(printerPort || 9100),
+          printer_width: Number(printerWidth || 80),
+        },
+      });
+      toast.success("Terminal settings saved.");
+      const refreshed = (await orderzillaApi.dashboard.terminals.byId(id)) as ApiTerminal;
+      setTerminal(refreshed);
+      syncForm(refreshed);
+    } catch {
+      toast.error("Failed to save settings.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const sendCommand = async () => {
+    if (command === "SHOW_MESSAGE" && !message.trim()) {
+      toast.error("Please enter message text.");
+      return;
+    }
+    try {
+      setIsSending(true);
+      await orderzillaApi.dashboard.terminals.commands.create(id, {
+        body: {
+          command,
+          payload:
+            command === "SHOW_MESSAGE"
+              ? ({ message: message.trim() } as unknown as Record<string, never>)
+              : undefined,
+        },
+      });
+      toast.success("Command queued.");
+      if (command === "SHOW_MESSAGE") setMessage("");
+    } catch {
+      toast.error("Failed to send command.");
+    } finally {
+      setIsSending(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -91,12 +143,15 @@ export default function TerminalDetailFunctionsPage({
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={saveSettings}
+              disabled={isSaving}
               className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[14px] font-semibold text-[#1d2512]"
             >
-              Save Changes
+              {isSaving ? "Saving..." : "Save Changes"}
             </button>
             <button
               type="button"
+              onClick={() => terminal && syncForm(terminal)}
               className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855]"
             >
               Reset to Defaults
@@ -107,25 +162,25 @@ export default function TerminalDetailFunctionsPage({
         <div className="mt-3 border-b border-[#e9ebef]">
           <div className="flex items-center gap-8 text-[15px] font-semibold">
             <Link
-              href={`/dashboard/terminals/${id}`}
+              href={`/dashboard/terminals/${id}?tab=overview`}
               className="pb-2 text-[#7a8291] hover:text-[#1f2631]"
             >
               Overview
             </Link>
             <Link
-              href={`/dashboard/terminals/${id}/display-content`}
+              href={`/dashboard/terminals/${id}/display-content?tab=display-content`}
               className="pb-2 text-[#7a8291] hover:text-[#1f2631]"
             >
               Display Content
             </Link>
             <Link
-              href={`/dashboard/terminals/${id}/functions`}
+              href={`/dashboard/terminals/${id}/functions?tab=functions`}
               className="pb-2 text-[#1f2631] border-b-2 border-[#d4ff00]"
             >
               Functions
             </Link>
             <Link
-              href={`/dashboard/terminals/${id}/logs`}
+              href={`/dashboard/terminals/${id}/logs?tab=logs`}
               className="pb-2 text-[#7a8291] hover:text-[#1f2631]"
             >
               Logs
@@ -133,82 +188,87 @@ export default function TerminalDetailFunctionsPage({
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-3 gap-3">
-          <FunctionCard title="Order Capabilities">
-            <ToggleRow label="Enable Dine-in" on />
-            <ToggleRow label="Enable Takeaway" on />
-            <ToggleRow label="Enable Delivery" on={false} />
-            <ToggleRow label="Allow order modification before payment" on />
-            <div className="pt-1">
-              <label className="text-[14px] font-semibold text-[#4e5664]">
-                Order timeout duration (seconds)
+        <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-3">
+          <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
+            <h2 className="text-[24px] font-bold text-[#1a212c]">Terminal Runtime Settings</h2>
+            <div className="mt-3 space-y-3">
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Mode</label>
+                <div className="mt-1">
+                  <SelectMenu
+                    value={mode}
+                    onChange={(value) => setMode(value as "INDOOR" | "TAKEAWAY")}
+                    options={[
+                      { label: "Indoor", value: "INDOOR" },
+                      { label: "Takeaway", value: "TAKEAWAY" },
+                    ]}
+                    className="w-full"
+                  />
+                </div>
+              </div>
+              <label className="flex items-center gap-2 text-[13px] font-semibold text-[#2f3743]">
+                <input
+                  type="checkbox"
+                  checked={isActive}
+                  onChange={(event) => setIsActive(event.target.checked)}
+                  className="h-4 w-4 rounded border-[#cfd5de]"
+                />
+                Terminal active
               </label>
-              <input
-                className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px]"
-                defaultValue="120"
-              />
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Printer Host</label>
+                <input
+                  value={printerHost}
+                  onChange={(event) => setPrinterHost(event.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                  placeholder="192.168.1.50"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[12px] text-[#6e7785]">Printer Port</label>
+                  <input
+                    type="number"
+                    value={printerPort}
+                    onChange={(event) => setPrinterPort(event.target.value)}
+                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                  />
+                </div>
+                <div>
+                  <label className="text-[12px] text-[#6e7785]">Printer Width (mm)</label>
+                  <input
+                    type="number"
+                    value={printerWidth}
+                    onChange={(event) => setPrinterWidth(event.target.value)}
+                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                  />
+                </div>
+              </div>
             </div>
-          </FunctionCard>
+          </article>
 
-          <FunctionCard title="Payment Options">
-            <ToggleRow label="Enable Cash" on />
-            <ToggleRow label="Enable Card" on />
-            <ToggleRow label="Enable Mobile Pay" on />
-            <ToggleRow label="Enable Gift Cards" on={false} />
-            <div className="pt-1">
-              <label className="text-[14px] font-semibold text-[#4e5664]">
-                Default payment method
-              </label>
+          <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
+            <h2 className="text-[24px] font-bold text-[#1a212c]">Command Actions</h2>
+            <div className="mt-3 space-y-2">
+              <SelectMenu value={command} onChange={setCommand} options={commandOptions} className="w-full" />
+              {command === "SHOW_MESSAGE" ? (
+                <textarea
+                  value={message}
+                  onChange={(event) => setMessage(event.target.value)}
+                  className="h-24 w-full rounded-lg border border-[#dfe3e8] px-3 py-2 text-[13px]"
+                  placeholder="Message shown on terminal"
+                />
+              ) : null}
               <button
                 type="button"
-                className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 inline-flex items-center justify-between text-[14px] text-[#2f3743]"
+                onClick={sendCommand}
+                disabled={isSending}
+                className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[13px] font-semibold text-[#3f4653] disabled:opacity-50"
               >
-                <span>Card</span>
-                <ChevronDown size={14} />
+                {isSending ? "Sending..." : "Queue Command"}
               </button>
             </div>
-            <ToggleRow label="Auto-close order after payment" on />
-          </FunctionCard>
-
-          <FunctionCard title="Discounts & Overrides">
-            <ToggleRow label="Allow manual discount" on />
-            <ToggleRow label="Allow staff override" on />
-            <div className="pt-1">
-              <label className="text-[14px] font-semibold text-[#4e5664]">
-                Max discount %
-              </label>
-              <input
-                className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px]"
-                defaultValue="25"
-              />
-            </div>
-            <ToggleRow label="Require manager PIN" on={false} />
-          </FunctionCard>
-
-          <FunctionCard title="Loyalty & Identification">
-            <ToggleRow label="Enable loyalty login" on />
-            <ToggleRow label="Allow QR code scan" on />
-            <ToggleRow label="Require customer email" on={false} />
-            <ToggleRow label="Allow guest checkout" on />
-          </FunctionCard>
-
-          <FunctionCard title="Maintenance & Security">
-            <ToggleRow label="Enable maintenance mode access" on={false} />
-            <ToggleRow label="Show debug info" on={false} />
-            <div className="pt-1">
-              <label className="text-[14px] font-semibold text-[#4e5664]">
-                Auto-logout after inactivity (seconds)
-              </label>
-              <input
-                className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px]"
-                defaultValue="300"
-              />
-            </div>
-            <ToggleRow
-              label="Age verification (if alcohol products enabled)"
-              on={false}
-            />
-          </FunctionCard>
+          </article>
         </div>
       </section>
     </div>

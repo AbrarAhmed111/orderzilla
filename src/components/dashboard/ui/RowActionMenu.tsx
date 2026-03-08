@@ -36,7 +36,7 @@ export default function RowActionMenu({ actions }: RowActionMenuProps) {
         <Ellipsis size={18} />
       </button>
       {open && (
-        <div className="absolute right-0 z-30 mt-1 w-36 rounded-lg border border-[#e4e6ea] bg-white py-1 shadow-md">
+        <div className="absolute right-0 z-[9999] mt-1 w-36 rounded-lg border border-[#e4e6ea] bg-white py-1 shadow-md">
           {actions.map((action) => (
             <button
               key={action.label}

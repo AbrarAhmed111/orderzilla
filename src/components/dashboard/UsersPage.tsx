@@ -8,6 +8,8 @@ import toast from "react-hot-toast";
 import RowActionMenu from "@/components/dashboard/ui/RowActionMenu";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
+import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
+import { validateField } from "@/lib/validation";
 import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api/orderzilla-api";
 import type { components } from "@/types/orderzilla-openapi";
@@ -34,12 +36,13 @@ type UserTableResponse = {
   };
 };
 
-function Toggle({ on, onToggle }: { on: boolean; onToggle: (next: boolean) => void }) {
+function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => void }) {
   return (
     <button
       type="button"
-      onClick={() => onToggle(!on)}
-      className={`relative inline-flex h-7 w-12 items-center rounded-full border transition ${
+      onClick={() => onToggle?.(!on)}
+      disabled={!onToggle}
+      className={`relative inline-flex h-7 w-12 items-center rounded-full border transition disabled:opacity-60 disabled:cursor-not-allowed ${
         on ? "bg-[#d7ff3f] border-[#c9f339]" : "bg-[#eceef2] border-[#dde2ea]"
       }`}
     >
@@ -128,17 +131,18 @@ function BulkActions({
           value={assignRole}
           onChange={onAssignRoleChange}
           options={[
-            { label: "Assign Role", value: "viewer" },
+            { label: "Assign Role", value: "" },
             { label: "Admin", value: "admin" },
             { label: "Manager", value: "manager" },
             { label: "Viewer", value: "viewer" },
           ]}
           className="min-w-[130px]"
+          openAbove
         />
         <button
           type="button"
           onClick={onAssignRole}
-          disabled={selectedCount === 0}
+          disabled={selectedCount === 0 || !assignRole}
           className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-6 text-[12px] font-semibold text-[#3f4653]"
         >
           Assign Role
@@ -173,9 +177,23 @@ export default function UsersPage() {
   const [error, setError] = useState("");
   const [searchInput, setSearchInput] = useState(q);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [assignRole, setAssignRole] = useState("viewer");
+  const [assignRole, setAssignRole] = useState("");
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createEmail, setCreateEmail] = useState("");
+  const [createPassword, setCreatePassword] = useState("");
+  const [createRole, setCreateRole] = useState("manager");
+  const [isCreateSubmitting, setIsCreateSubmitting] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteIds, setDeleteIds] = useState<string[]>([]);
+  const [isDeleteSubmitting, setIsDeleteSubmitting] = useState(false);
+  const [isResetPasswordModalOpen, setIsResetPasswordModalOpen] = useState(false);
+  const [resetPasswordUserId, setResetPasswordUserId] = useState("");
+  const [resetPasswordValue, setResetPasswordValue] = useState("");
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
 
   const syncQuery = useCallback(
     (patch: Record<string, string | number | undefined>) => {
@@ -241,16 +259,21 @@ export default function UsersPage() {
     fetchUsers();
   }, [fetchUsers]);
 
+  const selectableRows = useMemo(() => rows.filter((r) => r.role !== "OWNER"), [rows]);
   const allCurrentPageSelected = useMemo(
-    () => rows.length > 0 && rows.every((row) => selectedIds.includes(row.id)),
-    [rows, selectedIds],
+    () =>
+      selectableRows.length > 0 &&
+      selectableRows.every((row) => selectedIds.includes(row.id)),
+    [selectableRows, selectedIds],
   );
 
   const updateUsers = async (ids: string[], payload: { is_active?: boolean; role?: UserApiRole }) => {
-    if (!ids.length) return;
+    const ownerIds = new Set(rows.filter((r) => r.role === "OWNER").map((r) => r.id));
+    const modifiableIds = ids.filter((id) => !ownerIds.has(id));
+    if (!modifiableIds.length) return;
     const loadingToast = toast.loading("Updating users...");
     try {
-      await Promise.all(ids.map((id) => orderzillaApi.dashboard.users.update(id, { body: payload })));
+      await Promise.all(modifiableIds.map((id) => orderzillaApi.dashboard.users.update(id, { body: payload })));
       toast.success("Users updated.");
       setSelectedIds([]);
       await fetchUsers();
@@ -261,41 +284,100 @@ export default function UsersPage() {
     }
   };
 
+  const openDeleteModal = (ids: string[]) => {
+    setDeleteIds(ids);
+    setIsDeleteModalOpen(true);
+  };
+
   const deleteUsers = async (ids: string[]) => {
-    if (!ids.length) return;
-    const loadingToast = toast.loading("Deleting users...");
+    const ownerIds = new Set(rows.filter((r) => r.role === "OWNER").map((r) => r.id));
+    const modifiableIds = ids.filter((id) => !ownerIds.has(id));
+    if (!modifiableIds.length) return;
     try {
-      await Promise.all(ids.map((id) => orderzillaApi.dashboard.users.remove(id)));
+      setIsDeleteSubmitting(true);
+      await Promise.all(modifiableIds.map((id) => orderzillaApi.dashboard.users.remove(id)));
       toast.success("Users deleted.");
       setSelectedIds([]);
+      setDeleteIds([]);
+      setIsDeleteModalOpen(false);
       await fetchUsers();
     } catch {
       toast.error("Failed to delete users.");
     } finally {
-      toast.dismiss(loadingToast);
+      setIsDeleteSubmitting(false);
     }
   };
 
-  const handleCreateUser = async () => {
-    const name = window.prompt("User name")?.trim() ?? "";
-    if (!name) return;
-    const email = window.prompt("Email")?.trim() ?? "";
-    if (!email) return;
-    const password = window.prompt("Temporary password (min 8 chars)") ?? "";
-    if (!password) return;
-    const roleInput = (window.prompt("Role: ADMIN, MANAGER, VIEWER", "MANAGER") ?? "MANAGER").toUpperCase();
-    const role: UserApiRole = roleInput === "ADMIN" ? "ADMIN" : roleInput === "VIEWER" ? "VIEWER" : "MANAGER";
+  const resetCreateForm = () => {
+    setCreateName("");
+    setCreateEmail("");
+    setCreatePassword("");
+    setCreateRole("manager");
+  };
 
-    const loadingToast = toast.loading("Creating user...");
+  const createNameError = validateField(createName, [
+    { type: "required", message: "Full name is required." },
+    { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+  ]);
+  const createEmailError = validateField(createEmail, [
+    { type: "required", message: "Email is required." },
+    { type: "email", message: "Enter a valid email address." },
+  ]);
+  const createPasswordError = validateField(createPassword, [
+    { type: "required", message: "Password is required." },
+    { type: "minLength", value: 8, message: "Password must be at least 8 characters." },
+  ]);
+  const isCreateUserFormValid =
+    !createNameError && !createEmailError && !createPasswordError;
+
+  const resetPasswordError = validateField(resetPasswordValue, [
+    { type: "required", message: "Password is required." },
+    { type: "minLength", value: 8, message: "Password must be at least 8 characters." },
+  ]);
+  const isResetPasswordFormValid = !resetPasswordError;
+
+  const handleCreateUser = async () => {
+    if (!isCreateUserFormValid) return;
+    const name = createName.trim();
+    const email = createEmail.trim();
+    const password = createPassword;
+    const role = roleOptionToApi(createRole);
     try {
+      setIsCreateSubmitting(true);
       await orderzillaApi.dashboard.users.create({ body: { name, email, password, role } });
       toast.success("User created.");
+      setIsCreateModalOpen(false);
+      resetCreateForm();
       syncQuery({ page: 1 });
       await fetchUsers();
     } catch {
       toast.error("Failed to create user.");
     } finally {
-      toast.dismiss(loadingToast);
+      setIsCreateSubmitting(false);
+    }
+  };
+
+  const openResetPasswordModal = (userId: string) => {
+    setResetPasswordUserId(userId);
+    setResetPasswordValue("");
+    setIsResetPasswordModalOpen(true);
+  };
+
+  const submitResetPassword = async () => {
+    if (!resetPasswordUserId || !isResetPasswordFormValid) return;
+    try {
+      setIsResettingPassword(true);
+      await orderzillaApi.dashboard.users.resetPassword(resetPasswordUserId, {
+        body: { new_password: resetPasswordValue },
+      });
+      toast.success("Password reset successfully.");
+      setIsResetPasswordModalOpen(false);
+      setResetPasswordUserId("");
+      setResetPasswordValue("");
+    } catch {
+      toast.error("Failed to reset password.");
+    } finally {
+      setIsResettingPassword(false);
     }
   };
 
@@ -354,14 +436,14 @@ export default function UsersPage() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={handleCreateUser}
+              onClick={() => setIsCreateModalOpen(true)}
               className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512]"
             >
               + Add User
             </button>
             <button
               type="button"
-              onClick={() => importRef.current?.click()}
+              onClick={() => setIsImportModalOpen(true)}
               className="h-9 rounded-lg border border-[#e4e6ea] bg-white px-4 text-[12px] font-semibold text-[#414855]"
             >
               Import
@@ -373,7 +455,10 @@ export default function UsersPage() {
               className="hidden"
               onChange={async (event) => {
                 const file = event.target.files?.[0];
-                if (file) await handleImport(file);
+                if (file) {
+                  setIsImportModalOpen(false);
+                  await handleImport(file);
+                }
                 event.currentTarget.value = "";
               }}
             />
@@ -392,6 +477,8 @@ export default function UsersPage() {
           <div className="h-9 flex-1 rounded-lg border border-[#e4e6ea] bg-white px-3 flex items-center gap-2">
             <Search size={15} className="text-[#97a0ad]" />
             <input
+              type="search"
+              autoComplete="off"
               placeholder="Search by name or email"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
@@ -439,6 +526,20 @@ export default function UsersPage() {
           </div>
         </div>
 
+        {selectedIds.length > 0 ? (
+          <div className="mt-3">
+            <BulkActions
+              selectedCount={selectedIds.length}
+              onActivate={() => updateUsers(selectedIds, { is_active: true })}
+              onDeactivate={() => updateUsers(selectedIds, { is_active: false })}
+              onDelete={() => openDeleteModal(selectedIds)}
+              assignRole={assignRole}
+              onAssignRoleChange={setAssignRole}
+              onAssignRole={() => updateUsers(selectedIds, { role: roleOptionToApi(assignRole) })}
+            />
+          </div>
+        ) : null}
+
         {isLoading ? (
           <div className="mt-4">
             <TableSkeleton rows={6} columns={8} />
@@ -455,7 +556,7 @@ export default function UsersPage() {
                     onChange={(e) =>
                       setSelectedIds((prev) =>
                         e.target.checked
-                          ? Array.from(new Set([...prev, ...rows.map((r) => r.id)]))
+                          ? Array.from(new Set([...prev, ...selectableRows.map((r) => r.id)]))
                           : prev.filter((id) => !rows.some((row) => row.id === id)),
                       )
                     }
@@ -490,6 +591,7 @@ export default function UsersPage() {
                     <input
                       type="checkbox"
                       checked={selectedIds.includes(user.id)}
+                      disabled={user.role === "OWNER"}
                       onChange={(e) =>
                         setSelectedIds((prev) =>
                           e.target.checked
@@ -497,7 +599,7 @@ export default function UsersPage() {
                             : prev.filter((id) => id !== user.id),
                         )
                       }
-                      className="h-4 w-4 rounded border-[#cfd5de]"
+                      className="h-4 w-4 rounded border-[#cfd5de] disabled:opacity-50 disabled:cursor-not-allowed"
                     />
                   </td>
                   <td className="px-2 py-3">
@@ -519,37 +621,53 @@ export default function UsersPage() {
                   </td>
                   <td className="px-2 py-3 text-[#3e4653]">{user.lastLogin}</td>
                   <td className="px-2 py-3">
-                    <Toggle on={user.active} onToggle={(next) => updateUsers([user.id], { is_active: next })} />
+                    <Toggle
+                      on={user.active}
+                      onToggle={user.role === "OWNER" ? undefined : (next) => updateUsers([user.id], { is_active: next })}
+                    />
                   </td>
                   <td className="px-3 py-3 text-right">
                     <RowActionMenu
-                      actions={[
-                        {
-                          label: "Edit user",
-                          onClick: () => router.push(`/dashboard/users/${user.id}/edit-user`),
-                        },
-                        {
-                          label: "Assign Admin",
-                          onClick: () => updateUsers([user.id], { role: "ADMIN" }),
-                        },
-                        {
-                          label: "Assign Manager",
-                          onClick: () => updateUsers([user.id], { role: "MANAGER" }),
-                        },
-                        {
-                          label: "Assign Viewer",
-                          onClick: () => updateUsers([user.id], { role: "VIEWER" }),
-                        },
-                        {
-                          label: user.active ? "Deactivate" : "Activate",
-                          onClick: () => updateUsers([user.id], { is_active: !user.active }),
-                        },
-                        {
-                          label: "Delete user",
-                          onClick: () => deleteUsers([user.id]),
-                          danger: true,
-                        },
-                      ]}
+                      actions={
+                        user.role === "OWNER"
+                          ? [
+                              {
+                                label: "Edit user",
+                                onClick: () => router.push(`/dashboard/users/${user.id}/edit-user`),
+                              },
+                            ]
+                          : [
+                              {
+                                label: "Edit user",
+                                onClick: () => router.push(`/dashboard/users/${user.id}/edit-user`),
+                              },
+                              {
+                                label: "Assign Admin",
+                                onClick: () => updateUsers([user.id], { role: "ADMIN" }),
+                              },
+                              {
+                                label: "Assign Manager",
+                                onClick: () => updateUsers([user.id], { role: "MANAGER" }),
+                              },
+                              {
+                                label: "Assign Viewer",
+                                onClick: () => updateUsers([user.id], { role: "VIEWER" }),
+                              },
+                              {
+                                label: user.active ? "Deactivate" : "Activate",
+                                onClick: () => updateUsers([user.id], { is_active: !user.active }),
+                              },
+                              {
+                                label: "Delete user",
+                                onClick: () => openDeleteModal([user.id]),
+                                danger: true,
+                              },
+                              {
+                                label: "Reset Password",
+                                onClick: () => openResetPasswordModal(user.id),
+                              },
+                            ]
+                      }
                     />
                   </td>
                 </tr>
@@ -560,17 +678,6 @@ export default function UsersPage() {
           </div>
         )}
 
-        <div className="mt-4">
-          <BulkActions
-            selectedCount={selectedIds.length}
-            onActivate={() => updateUsers(selectedIds, { is_active: true })}
-            onDeactivate={() => updateUsers(selectedIds, { is_active: false })}
-            onDelete={() => deleteUsers(selectedIds)}
-            assignRole={assignRole}
-            onAssignRoleChange={setAssignRole}
-            onAssignRole={() => updateUsers(selectedIds, { role: roleOptionToApi(assignRole) })}
-          />
-        </div>
         <TablePagination
           page={Math.max(1, page)}
           totalPages={Math.max(1, totalPages)}
@@ -583,6 +690,199 @@ export default function UsersPage() {
           }}
         />
       </section>
+
+      {isImportModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[640px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Import Users CSV</h2>
+            <p className="mt-1 text-[13px] text-[#6e7785]">
+              Please make sure your CSV includes the required columns before upload.
+            </p>
+
+            <div className="mt-4 rounded-lg border border-[#e4e6ea] bg-[#fafbfc] p-3 text-[13px]">
+              <p className="font-semibold text-[#2f3743]">Required</p>
+              <p className="mt-1 text-[#4f5a69]">
+                <code>name</code>, <code>email</code>, <code>password</code>
+              </p>
+              <p className="mt-3 font-semibold text-[#2f3743]">Optional</p>
+              <p className="mt-1 text-[#4f5a69]">
+                <code>role</code> (ADMIN, MANAGER, VIEWER)
+              </p>
+              <p className="mt-3 font-semibold text-[#2f3743]">Example header</p>
+              <p className="mt-1 text-[#4f5a69] break-all">name,email,password,role</p>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(false)}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => importRef.current?.click()}
+                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512]"
+              >
+                Choose CSV File
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isCreateModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[560px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Create User</h2>
+            <div className="mt-4 grid grid-cols-1 gap-3">
+              <ValidatedInput
+                autoComplete="off"
+                value={createName}
+                onChange={setCreateName}
+                rules={[
+                  { type: "required", message: "Full name is required." },
+                  { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+                ]}
+                className="h-10 rounded-lg border border-[#dfe3e8] px-3 text-[13px] outline-none focus:border-[#c0eb1a]"
+                placeholder="Full name"
+              />
+              <ValidatedInput
+                type="email"
+                autoComplete="email"
+                name="user-create-email"
+                value={createEmail}
+                onChange={setCreateEmail}
+                rules={[
+                  { type: "required", message: "Email is required." },
+                  { type: "email", message: "Enter a valid email address." },
+                ]}
+                className="h-10 rounded-lg border border-[#dfe3e8] px-3 text-[13px] outline-none focus:border-[#c0eb1a]"
+                placeholder="Email"
+              />
+              <ValidatedInput
+                type="password"
+                autoComplete="new-password"
+                name="user-create-password"
+                value={createPassword}
+                onChange={setCreatePassword}
+                rules={[
+                  { type: "required", message: "Password is required." },
+                  { type: "minLength", value: 8, message: "Password must be at least 8 characters." },
+                ]}
+                className="h-10 rounded-lg border border-[#dfe3e8] px-3 text-[13px] outline-none focus:border-[#c0eb1a]"
+                placeholder="Temporary password (min 8 chars)"
+              />
+              <SelectMenu
+                value={createRole}
+                onChange={setCreateRole}
+                options={[
+                  { label: "Manager", value: "manager" },
+                  { label: "Admin", value: "admin" },
+                  { label: "Viewer", value: "viewer" },
+                ]}
+              />
+            </div>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreateModalOpen(false);
+                  resetCreateForm();
+                }}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateUser}
+                disabled={isCreateSubmitting || !isCreateUserFormValid}
+                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
+              >
+                {isCreateSubmitting ? "Creating..." : "Create User"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isDeleteModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[520px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">
+              {deleteIds.length === 1 ? "Delete User" : "Delete Users"}
+            </h2>
+            <p className="mt-2 text-[13px] text-[#6e7785]">
+              {deleteIds.length === 1
+                ? "Are you sure you want to delete this user?"
+                : `Are you sure you want to delete ${deleteIds.length} selected users?`}
+            </p>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={isDeleteSubmitting}
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setDeleteIds([]);
+                }}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleteSubmitting}
+                onClick={() => deleteUsers(deleteIds)}
+                className="h-9 rounded-lg bg-[#ef4a4c] px-4 text-[12px] font-semibold text-white disabled:opacity-50"
+              >
+                {isDeleteSubmitting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isResetPasswordModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[520px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Reset User Password</h2>
+            <p className="mt-1 text-[13px] text-[#6e7785]">Set a new temporary password.</p>
+            <ValidatedInput
+              type="password"
+              autoComplete="new-password"
+              name="user-reset-password"
+              value={resetPasswordValue}
+              onChange={setResetPasswordValue}
+              rules={[
+                { type: "required", message: "Password is required." },
+                { type: "minLength", value: 8, message: "Password must be at least 8 characters." },
+              ]}
+              className="mt-4 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px] outline-none focus:border-[#c0eb1a]"
+              placeholder="New password (min 8 chars)"
+            />
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={isResettingPassword}
+                onClick={() => setIsResetPasswordModalOpen(false)}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isResettingPassword || !isResetPasswordFormValid}
+                onClick={submitResetPassword}
+                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
+              >
+                {isResettingPassword ? "Resetting..." : "Reset Password"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

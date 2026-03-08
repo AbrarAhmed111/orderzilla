@@ -57,6 +57,26 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
     await fetchOrder();
   };
 
+  const timeline = (() => {
+    const createdAt = (order as unknown as { created_at?: string })?.created_at;
+    const baseTime = createdAt ? new Date(createdAt).toLocaleString() : "-";
+    const sequence = [
+      { key: "PENDING", label: "Order Created" },
+      { key: "CONFIRMED", label: "Payment Confirmed" },
+      { key: "PREPARING", label: "Preparing" },
+      { key: "READY", label: "Ready" },
+      { key: "COMPLETED", label: "Completed" },
+      { key: "CANCELLED", label: "Cancelled" },
+    ];
+    const currentIndex = sequence.findIndex((step) => step.key === order?.status);
+    return sequence.map((step, index) => ({
+      ...step,
+      done: currentIndex >= 0 ? index <= currentIndex : index === 0,
+      current: currentIndex === index,
+      time: index === 0 ? baseTime : "-",
+    }));
+  })();
+
   if (isLoading) {
     return (
       <div className="p-4">
@@ -175,9 +195,9 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
                   label="Customer name"
                   value={`${order?.customer_first_name ?? ""} ${order?.customer_last_name ?? ""}`.trim() || "-"}
                 />
-                <InfoRow label="Email" value="-" />
+                <InfoRow label="Email" value={(order as unknown as { customer_email?: string })?.customer_email ?? "-"} />
                 <InfoRow label="Loyalty card" value={order?.customer_card ?? "-"} />
-                <InfoRow label="Phone number" value="-" />
+                <InfoRow label="Phone number" value={(order as unknown as { customer_phone?: string })?.customer_phone ?? "-"} />
               </div>
             </article>
 
@@ -200,60 +220,31 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
         <div className="mt-3 grid grid-cols-[2fr_1fr] gap-3">
           <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
             <h3 className="text-[30px] font-bold text-[#1a212c]">Order Timeline</h3>
-            <div className="mt-4 grid grid-cols-2 gap-10">
-              <div className="space-y-4">
-                {[
-                  "Order Created",
-                  "Payment Confirmed",
-                  "Sent to Kitchen",
-                ].map((step, idx) => (
-                  <div key={step} className="flex items-start gap-3">
-                    <div className="flex flex-col items-center">
-                      <span className="h-4 w-4 rounded-full bg-[#0ea35b]" />
-                      {idx !== 2 && <span className="mt-1 h-8 w-[2px] bg-[#b9deca]" />}
-                    </div>
-                    <div>
-                      <p className="text-[22px] font-semibold leading-tight text-[#1e2530]">
-                        {step}
-                      </p>
-                      <p className="text-[14px] text-[#656f7d]">Oct 26, 2023 - 12:45 PM</p>
-                    </div>
+            <div className="mt-4 space-y-4">
+              {timeline.map((step, index) => (
+                <div key={step.key} className="flex items-start gap-3">
+                  <div className="flex flex-col items-center">
+                    <span
+                      className={`h-4 w-4 rounded-full ${
+                        step.current
+                          ? "bg-[#d7ff3c] ring-4 ring-[#edf8c6]"
+                          : step.done
+                            ? "bg-[#0ea35b]"
+                            : "bg-white border-2 border-[#c8ced7]"
+                      }`}
+                    />
+                    {index !== timeline.length - 1 && (
+                      <span className={`mt-1 h-8 w-[2px] ${step.done ? "bg-[#b9deca]" : "bg-[#d7dde6]"}`} />
+                    )}
                   </div>
-                ))}
-              </div>
-              <div className="space-y-4">
-                {["Preparing", "Ready", "Completed"].map((step, idx) => {
-                  const isCurrent = idx === 0;
-                  return (
-                    <div key={step} className="flex items-start gap-3">
-                      <div className="flex flex-col items-center">
-                        <span
-                          className={`h-4 w-4 rounded-full ${
-                            isCurrent
-                              ? "bg-[#d7ff3c] ring-4 ring-[#edf8c6]"
-                              : "bg-white border-2 border-[#c8ced7]"
-                          }`}
-                        />
-                        {idx !== 2 && <span className="mt-1 h-8 w-[2px] bg-[#d7dde6]" />}
-                      </div>
-                      <div>
-                        <p
-                          className={`text-[22px] font-semibold leading-tight ${
-                            isCurrent ? "text-[#1e2530]" : "text-[#8a92a0]"
-                          }`}
-                        >
-                          {step}
-                        </p>
-                        {isCurrent && (
-                          <p className="text-[14px] text-[#656f7d]">
-                            Oct 26, 2023 - 12:46 PM
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                  <div>
+                    <p className={`text-[22px] font-semibold leading-tight ${step.done ? "text-[#1e2530]" : "text-[#8a92a0]"}`}>
+                      {step.label}
+                    </p>
+                    <p className="text-[14px] text-[#656f7d]">{step.time}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           </article>
 
@@ -278,7 +269,7 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
               </div>
               <div className="col-span-2">
                 <p className="text-[#6d7684]">Staff override</p>
-                <p className="font-semibold text-[#1d2430]">None</p>
+                <p className="font-semibold text-[#1d2430]">-</p>
               </div>
             </div>
           </article>

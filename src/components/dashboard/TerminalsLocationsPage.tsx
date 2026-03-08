@@ -8,6 +8,8 @@ import SelectMenu from "@/components/dashboard/ui/SelectMenu";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api/orderzilla-api";
+import { ValidatedInput, ValidatedTextarea } from "@/components/dashboard/ui/ValidatedInput";
+import { validateField } from "@/lib/validation";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 type ApiTerminal = {
@@ -55,6 +57,13 @@ type TerminalTableResponse = {
     total_pages?: number;
     total_items?: number;
     items_per_page?: number;
+  };
+};
+
+type TerminalCreatedResponse = {
+  oauth?: {
+    client_id?: string;
+    client_secret?: string;
   };
 };
 
@@ -123,6 +132,23 @@ export default function TerminalsLocationsPage() {
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [tableError, setTableError] = useState("");
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isShowMessageModalOpen, setIsShowMessageModalOpen] = useState(false);
+  const [showMessageValue, setShowMessageValue] = useState("");
+  const [showMessageTargetIds, setShowMessageTargetIds] = useState<string[]>([]);
+  const [isSendingMessageCommand, setIsSendingMessageCommand] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createCode, setCreateCode] = useState("");
+  const [createMode, setCreateMode] = useState<"INDOOR" | "TAKEAWAY">("INDOOR");
+  const [createLocationId, setCreateLocationId] = useState("");
+  const [createPrinterHost, setCreatePrinterHost] = useState("");
+  const [createPrinterPort, setCreatePrinterPort] = useState("9100");
+  const [createPrinterWidth, setCreatePrinterWidth] = useState("80");
+  const [isCreating, setIsCreating] = useState(false);
+  const [isOauthModalOpen, setIsOauthModalOpen] = useState(false);
+  const [createdClientId, setCreatedClientId] = useState("");
+  const [createdClientSecret, setCreatedClientSecret] = useState("");
 
   const locationOptions = useMemo(
     () => [
@@ -247,14 +273,19 @@ export default function TerminalsLocationsPage() {
     }
   };
 
-  const sendCommand = async (ids: string[], commandType: CommandType) => {
+  const sendCommand = async (ids: string[], commandType: CommandType, message?: string) => {
     if (!ids.length) return;
-    const message = commandType === "SHOW_MESSAGE" ? window.prompt("Enter message for terminals:")?.trim() ?? "" : "";
-    if (commandType === "SHOW_MESSAGE" && !message) {
-      toast.error("Message is required for SHOW_MESSAGE.");
-      return;
+    if (commandType === "SHOW_MESSAGE") {
+      const trimmed = (message ?? "").trim();
+      if (!trimmed) {
+        toast.error("Message is required for SHOW_MESSAGE.");
+        return;
+      }
     }
-    const payload = commandType === "SHOW_MESSAGE" ? ({ message } as unknown as Record<string, never>) : undefined;
+    const payload =
+      commandType === "SHOW_MESSAGE"
+        ? ({ message: (message ?? "").trim() } as unknown as Record<string, never>)
+        : undefined;
     const loadingToast = toast.loading("Sending command...");
     try {
       await Promise.all(
@@ -272,36 +303,95 @@ export default function TerminalsLocationsPage() {
     }
   };
 
-  const handleCreateTerminal = async () => {
+  const openShowMessageModal = (ids: string[]) => {
+    if (!ids.length) return;
+    setShowMessageTargetIds(ids);
+    setShowMessageValue("");
+    setIsShowMessageModalOpen(true);
+  };
+
+  const showMessageError = validateField(showMessageValue, [
+    { type: "required", message: "Message is required." },
+    { type: "minLength", value: 1, message: "Message cannot be empty." },
+  ]);
+  const isShowMessageFormValid = !showMessageError;
+
+  const submitShowMessageCommand = async () => {
+    if (!isShowMessageFormValid) return;
+    const text = showMessageValue.trim();
+    try {
+      setIsSendingMessageCommand(true);
+      await sendCommand(showMessageTargetIds, "SHOW_MESSAGE", text);
+      setIsShowMessageModalOpen(false);
+      setShowMessageValue("");
+      setShowMessageTargetIds([]);
+    } finally {
+      setIsSendingMessageCommand(false);
+    }
+  };
+
+  const createTerminalNameError = validateField(createName, [
+    { type: "required", message: "Terminal name is required." },
+    { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+  ]);
+  const createTerminalCodeError = validateField(createCode, [
+    { type: "required", message: "Terminal code is required." },
+    { type: "minLength", value: 2, message: "Code must be at least 2 characters." },
+  ]);
+  const isCreateTerminalFormValid =
+    !createTerminalNameError &&
+    !createTerminalCodeError &&
+    !!(createLocationId || locations[0]?.id);
+
+  const openCreateModal = () => {
     if (!locations.length) {
       toast.error("No locations available. Create a location first.");
       return;
     }
-    const name = window.prompt("Terminal name")?.trim() ?? "";
-    if (!name) return;
-    const terminalCode = window.prompt("Terminal code (e.g. ZH01-T1)")?.trim() ?? "";
-    if (!terminalCode) return;
-    const modeInput = (window.prompt("Terminal mode: INDOOR or TAKEAWAY", "INDOOR") ?? "INDOOR").toUpperCase();
-    const terminalMode: "INDOOR" | "TAKEAWAY" = modeInput === "TAKEAWAY" ? "TAKEAWAY" : "INDOOR";
-    const selectedLocationId = locationId !== "all" ? locationId : locations[0].id;
-    const loadingToast = toast.loading("Creating terminal...");
+    setCreateLocationId(locationId !== "all" ? locationId : locations[0].id);
+    setIsCreateModalOpen(true);
+  };
+
+  const resetCreateForm = () => {
+    setCreateName("");
+    setCreateCode("");
+    setCreateMode("INDOOR");
+    setCreatePrinterHost("");
+    setCreatePrinterPort("9100");
+    setCreatePrinterWidth("80");
+  };
+
+  const handleCreateTerminal = async () => {
+    if (!isCreateTerminalFormValid) return;
+    const name = createName.trim();
+    const terminalCode = createCode.trim();
+    const selectedLocationId = createLocationId || (locations[0]?.id ?? "");
     try {
-      await orderzillaApi.dashboard.terminals.create({
+      setIsCreating(true);
+      const response = (await orderzillaApi.dashboard.terminals.create({
         body: {
           name,
           terminal_code: terminalCode,
           location_id: selectedLocationId,
-          mode: terminalMode,
-          printer_port: 9100,
-          printer_width: 80,
+          mode: createMode,
+          printer_host: createPrinterHost.trim() || undefined,
+          printer_port: Number(createPrinterPort || 9100),
+          printer_width: Number(createPrinterWidth || 80),
         },
-      });
+      })) as TerminalCreatedResponse;
       toast.success("Terminal created.");
+      setIsCreateModalOpen(false);
+      resetCreateForm();
+      if (response?.oauth?.client_id || response?.oauth?.client_secret) {
+        setCreatedClientId(response.oauth?.client_id ?? "");
+        setCreatedClientSecret(response.oauth?.client_secret ?? "");
+        setIsOauthModalOpen(true);
+      }
       await fetchTerminals();
     } catch {
       toast.error("Failed to create terminal.");
     } finally {
-      toast.dismiss(loadingToast);
+      setIsCreating(false);
     }
   };
 
@@ -369,14 +459,14 @@ export default function TerminalsLocationsPage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleCreateTerminal}
+              onClick={openCreateModal}
               className="h-10 rounded-lg bg-[#d0fe1d] px-4 text-[13px] font-semibold text-[#12161f]"
             >
               + Add Terminal
             </button>
             <button
               type="button"
-              onClick={() => importLocationsRef.current?.click()}
+              onClick={() => setIsImportModalOpen(true)}
               className="h-10 rounded-lg border border-[#d1d6db] bg-white px-4 text-[13px] font-semibold text-[#12161f]"
             >
               Import Locations
@@ -388,7 +478,10 @@ export default function TerminalsLocationsPage() {
               className="hidden"
               onChange={async (event) => {
                 const file = event.target.files?.[0];
-                if (file) await handleImportLocations(file);
+                if (file) {
+                  setIsImportModalOpen(false);
+                  await handleImportLocations(file);
+                }
                 event.currentTarget.value = "";
               }}
             />
@@ -396,12 +489,13 @@ export default function TerminalsLocationsPage() {
         </div>
 
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
-          <input
-            type="search"
-            value={searchInput}
-            onChange={(event) => setSearchInput(event.target.value)}
-            placeholder="Search terminal name, code, location"
-            className="h-10 rounded-lg border border-[#d1d6db] bg-white px-3 text-[13px] text-[#12161f] outline-none focus:border-[#c0eb1a]"
+            <input
+              type="search"
+              autoComplete="off"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Search terminal name, code, location"
+              className="h-10 rounded-lg border border-[#d1d6db] bg-white px-3 text-[13px] text-[#12161f] outline-none focus:border-[#c0eb1a]"
           />
           <SelectMenu
             value={locationId}
@@ -547,7 +641,11 @@ export default function TerminalsLocationsPage() {
             <button
               type="button"
               disabled={selectedCount === 0}
-              onClick={() => sendCommand(selectedIds, command)}
+              onClick={() =>
+                command === "SHOW_MESSAGE"
+                  ? openShowMessageModal(selectedIds)
+                  : sendCommand(selectedIds, command)
+              }
               className="h-9 rounded-lg border border-[#d1d6db] bg-white px-4 text-[12px] font-semibold text-[#12161f] disabled:opacity-50"
             >
               Send Command
@@ -573,6 +671,249 @@ export default function TerminalsLocationsPage() {
           onPageSizeChange={(nextSize) => syncQuery({ limit: nextSize, page: 1 })}
         />
       </section>
+
+      {isImportModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[640px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Import Locations CSV</h2>
+            <p className="mt-1 text-[13px] text-[#6e7785]">
+              Please make sure your CSV includes the required columns before upload.
+            </p>
+
+            <div className="mt-4 rounded-lg border border-[#e4e6ea] bg-[#fafbfc] p-3 text-[13px]">
+              <p className="font-semibold text-[#2f3743]">Required</p>
+              <p className="mt-1 text-[#4f5a69]">
+                <code>name</code>
+              </p>
+              <p className="mt-3 font-semibold text-[#2f3743]">Optional</p>
+              <p className="mt-1 text-[#4f5a69]">
+                <code>address</code>, <code>city</code>, <code>country</code>, <code>timezone</code>
+              </p>
+              <p className="mt-3 font-semibold text-[#2f3743]">Example header</p>
+              <p className="mt-1 text-[#4f5a69] break-all">name,address,city,country,timezone</p>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(false)}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => importLocationsRef.current?.click()}
+                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512]"
+              >
+                Choose CSV File
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isCreateModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[640px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Create Terminal</h2>
+            <p className="mt-1 text-[13px] text-[#6e7785]">Fill required fields to create a terminal.</p>
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="text-[12px] text-[#6e7785]">Location *</label>
+                <div className="mt-1">
+                  <SelectMenu
+                    value={createLocationId}
+                    onChange={setCreateLocationId}
+                    options={locations.map((loc) => ({ label: loc.name, value: loc.id }))}
+                    className="w-full"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Terminal Name *</label>
+                <ValidatedInput
+                  autoComplete="off"
+                  value={createName}
+                  onChange={setCreateName}
+                  rules={[
+                    { type: "required", message: "Terminal name is required." },
+                    { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+                  ]}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px] outline-none focus:border-[#c0eb1a]"
+                  placeholder="e.g. Front Kiosk"
+                />
+              </div>
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Terminal Code *</label>
+                <ValidatedInput
+                  autoComplete="off"
+                  value={createCode}
+                  onChange={setCreateCode}
+                  rules={[
+                    { type: "required", message: "Terminal code is required." },
+                    { type: "minLength", value: 2, message: "Code must be at least 2 characters." },
+                  ]}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px] outline-none focus:border-[#c0eb1a]"
+                  placeholder="e.g. ZH01-T1"
+                />
+              </div>
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Mode</label>
+                <div className="mt-1">
+                  <SelectMenu
+                    value={createMode}
+                    onChange={(value) => setCreateMode(value as "INDOOR" | "TAKEAWAY")}
+                    options={[
+                      { label: "Indoor", value: "INDOOR" },
+                      { label: "Takeaway", value: "TAKEAWAY" },
+                    ]}
+                    className="w-full"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Printer Host</label>
+                <input
+                  autoComplete="off"
+                  value={createPrinterHost}
+                  onChange={(event) => setCreatePrinterHost(event.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                  placeholder="192.168.1.10"
+                />
+              </div>
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Printer Port</label>
+                <input
+                  type="number"
+                  value={createPrinterPort}
+                  onChange={(event) => setCreatePrinterPort(event.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                />
+              </div>
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Printer Width (mm)</label>
+                <input
+                  type="number"
+                  value={createPrinterWidth}
+                  onChange={(event) => setCreatePrinterWidth(event.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                />
+              </div>
+            </div>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreateModalOpen(false);
+                  resetCreateForm();
+                }}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateTerminal}
+                disabled={isCreating || !isCreateTerminalFormValid}
+                className="h-9 rounded-lg bg-[#d0fe1d] px-4 text-[12px] font-semibold text-[#12161f] disabled:opacity-50"
+              >
+                {isCreating ? "Creating..." : "Create Terminal"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isOauthModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[680px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">OAuth Credentials (One-time)</h2>
+            <p className="mt-1 text-[13px] text-[#6e7785]">
+              Store these credentials securely now. Backend returns the secret only once.
+            </p>
+            <div className="mt-4 space-y-2 text-[12px]">
+              <div className="rounded-lg border border-[#e4e6ea] bg-[#fafbfc] p-3">
+                <p className="text-[#6e7785]">Client ID</p>
+                <p className="mt-1 font-semibold text-[#1a212c] break-all">{createdClientId || "-"}</p>
+              </div>
+              <div className="rounded-lg border border-[#e4e6ea] bg-[#fafbfc] p-3">
+                <p className="text-[#6e7785]">Client Secret</p>
+                <p className="mt-1 font-semibold text-[#1a212c] break-all">{createdClientSecret || "-"}</p>
+              </div>
+            </div>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(
+                    `client_id=${createdClientId}\nclient_secret=${createdClientSecret}`,
+                  );
+                  toast.success("Credentials copied.");
+                }}
+                className="h-9 rounded-lg border border-[#d1d6db] bg-white px-4 text-[12px] font-semibold text-[#12161f]"
+              >
+                Copy
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOauthModalOpen(false);
+                  setCreatedClientId("");
+                  setCreatedClientSecret("");
+                }}
+                className="h-9 rounded-lg bg-[#d0fe1d] px-4 text-[12px] font-semibold text-[#12161f]"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isShowMessageModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[560px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Send Message Command</h2>
+            <p className="mt-1 text-[13px] text-[#6e7785]">
+              Message will be queued for {showMessageTargetIds.length} terminal(s).
+            </p>
+            <ValidatedTextarea
+              autoComplete="off"
+              value={showMessageValue}
+              onChange={setShowMessageValue}
+              rules={[
+                { type: "required", message: "Message is required." },
+                { type: "minLength", value: 1, message: "Message cannot be empty." },
+              ]}
+              className="mt-4 h-28 w-full rounded-lg border border-[#dfe3e8] px-3 py-2 text-[13px] outline-none focus:border-[#c0eb1a]"
+              placeholder="Type message to display on terminals"
+            />
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={isSendingMessageCommand}
+                onClick={() => {
+                  setIsShowMessageModalOpen(false);
+                  setShowMessageValue("");
+                  setShowMessageTargetIds([]);
+                }}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSendingMessageCommand || !isShowMessageFormValid}
+                onClick={submitShowMessageCommand}
+                className="h-9 rounded-lg bg-[#d0fe1d] px-4 text-[12px] font-semibold text-[#12161f] disabled:opacity-50"
+              >
+                {isSendingMessageCommand ? "Sending..." : "Send Message"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

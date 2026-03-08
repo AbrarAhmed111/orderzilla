@@ -7,6 +7,8 @@ import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api";
+import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
+import { validateField } from "@/lib/validation";
 
 type EditCategoryPageProps = {
   id: string;
@@ -62,12 +64,15 @@ export default function EditCategoryPage({ id }: EditCategoryPageProps) {
     return () => URL.revokeObjectURL(objectUrl);
   }, [imageFile]);
 
+  const nameError = validateField(name, [
+    { type: "required", message: "Category name is required." },
+    { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+  ]);
+  const isFormValid = !nameError;
+
   const handleSave = async () => {
+    if (!isFormValid) return;
     const trimmedName = name.trim();
-    if (!trimmedName) {
-      toast.error("Category name is required.");
-      return;
-    }
 
     try {
       setIsSaving(true);
@@ -155,7 +160,7 @@ export default function EditCategoryPage({ id }: EditCategoryPageProps) {
             <button
               type="button"
               onClick={handleSave}
-              disabled={isSaving}
+              disabled={isSaving || !isFormValid}
               className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[14px] font-semibold text-[#1d2512] disabled:opacity-50"
             >
               {isSaving ? "Saving..." : "Save Category"}
@@ -179,10 +184,14 @@ export default function EditCategoryPage({ id }: EditCategoryPageProps) {
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[14px] font-semibold text-[#363f4c]">Category Name</label>
-                  <input
-                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none"
+                  <ValidatedInput
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={setName}
+                    rules={[
+                      { type: "required", message: "Category name is required." },
+                      { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+                    ]}
+                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none focus:border-[#c0eb1a]"
                     placeholder="e.g., Burgers"
                   />
                 </div>

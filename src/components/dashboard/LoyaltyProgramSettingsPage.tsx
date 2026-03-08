@@ -154,6 +154,13 @@ export default function LoyaltyProgramSettingsPage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={fetchLoyaltyProgram}
+              className="h-9 rounded-lg border border-[#d1d6db] bg-white px-4 text-[12px] font-semibold text-[#12161f]"
+            >
+              Refresh
+            </button>
+            <button
+              type="button"
               disabled={isSaving || !isDirty}
               onClick={onSave}
               className="h-9 rounded-lg bg-[#d0fe1d] px-4 text-[12px] font-semibold text-[#12161f] disabled:opacity-50"

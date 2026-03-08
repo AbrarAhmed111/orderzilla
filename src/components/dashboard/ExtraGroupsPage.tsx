@@ -56,6 +56,7 @@ export default function ExtraGroupsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   const mapGroup = (group: ApiExtraGroup): GroupRow => ({
     id: group.id ?? crypto.randomUUID(),
@@ -258,7 +259,7 @@ export default function ExtraGroupsPage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => importRef.current?.click()}
+              onClick={() => setIsImportModalOpen(true)}
               disabled={isBulkUpdating}
               className="h-9 rounded-lg border border-[#e4e6ea] bg-white px-4 text-[12px] font-semibold text-[#414855]"
             >
@@ -271,7 +272,10 @@ export default function ExtraGroupsPage() {
               className="hidden"
               onChange={(event) => {
                 const file = event.target.files?.[0];
-                if (file) importGroups(file);
+                if (file) {
+                  setIsImportModalOpen(false);
+                  importGroups(file);
+                }
               }}
             />
             <Link
@@ -295,6 +299,8 @@ export default function ExtraGroupsPage() {
         <div className="mt-4 h-9 rounded-lg border border-[#e4e6ea] bg-white px-3 flex items-center gap-2">
           <Search size={14} className="text-[#97a0ad]" />
           <input
+            type="search"
+            autoComplete="off"
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -384,6 +390,11 @@ export default function ExtraGroupsPage() {
                         <RowActionMenu
                           actions={[
                             {
+                              label: "Edit group",
+                              onClick: () =>
+                                (window.location.href = `/dashboard/extra-groups/create-extra-group?id=${group.id}`),
+                            },
+                            {
                               label: group.isRequired ? "Set optional" : "Set required",
                               onClick: () => updateGroupRequired(group, !group.isRequired),
                             },
@@ -454,6 +465,50 @@ export default function ExtraGroupsPage() {
           }}
         />
       </section>
+
+      {isImportModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[640px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Import Extra Groups CSV</h2>
+            <p className="mt-1 text-[13px] text-[#6e7785]">
+              Please make sure your CSV includes the required columns before upload.
+            </p>
+
+            <div className="mt-4 rounded-lg border border-[#e4e6ea] bg-[#fafbfc] p-3 text-[13px]">
+              <p className="font-semibold text-[#2f3743]">Required</p>
+              <p className="mt-1 text-[#4f5a69]">
+                <code>name</code>
+              </p>
+              <p className="mt-3 font-semibold text-[#2f3743]">Optional</p>
+              <p className="mt-1 text-[#4f5a69]">
+                <code>selection_type</code>, <code>min_selections</code>, <code>max_selections</code>,{" "}
+                <code>is_required</code>, <code>sort_order</code>
+              </p>
+              <p className="mt-3 font-semibold text-[#2f3743]">Example header</p>
+              <p className="mt-1 text-[#4f5a69] break-all">
+                name,selection_type,min_selections,max_selections,is_required,sort_order
+              </p>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(false)}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => importRef.current?.click()}
+                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512]"
+              >
+                Choose CSV File
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

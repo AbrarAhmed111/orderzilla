@@ -2,7 +2,9 @@
 
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
+import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api/orderzilla-api";
 import type { components } from "@/types/orderzilla-openapi";
@@ -96,7 +98,43 @@ function mapLoyalty(program?: ApiLoyaltyProgram): LoyaltyForm {
   };
 }
 
+function isBusinessValid(b: BusinessForm): boolean {
+  if (!b.name.trim() || b.name.trim().length < 2) return false;
+  if (!b.address.trim() || b.address.trim().length < 2) return false;
+  if (!b.city.trim() || b.city.trim().length < 2) return false;
+  if (!b.timezone.trim() || b.timezone.trim().length < 3) return false;
+  if (!/^[A-Za-z0-9_/+-]+$/.test(b.timezone.trim())) return false;
+  if (b.country.trim() && !/^[A-Za-z]{2,3}$/.test(b.country.trim())) return false;
+  return true;
+}
+
+function isLoyaltyValid(l: LoyaltyForm): boolean {
+  if (!l.name.trim()) return false;
+  const n = Number(l.points_per_chf);
+  if (!Number.isFinite(n) || n < 0) return false;
+  const c = Number(l.chf_per_point);
+  if (!Number.isFinite(c) || c < 0.000001) return false;
+  const minR = Number(l.min_redeem_points);
+  if (!Number.isFinite(minR) || minR < 0 || minR !== Math.floor(minR)) return false;
+  const maxP = Number(l.max_redeem_percent);
+  if (!Number.isFinite(maxP) || maxP < 0 || maxP > 100) return false;
+  const exp = Number(l.expiry_days);
+  if (!Number.isFinite(exp) || exp < 1 || exp !== Math.floor(exp)) return false;
+  return true;
+}
+
+function isTerminalValid(t: TerminalForm): boolean {
+  if (!t.name.trim() || t.name.trim().length < 2) return false;
+  if (!Number.isFinite(t.printer_port) || t.printer_port < 1 || t.printer_port > 65535) return false;
+  if (!Number.isFinite(t.printer_width) || t.printer_width < 1) return false;
+  return true;
+}
+
 export default function GlobalSettingsPage() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -127,6 +165,17 @@ export default function GlobalSettingsPage() {
   const [isSavingBusiness, setIsSavingBusiness] = useState(false);
   const [isSavingLoyalty, setIsSavingLoyalty] = useState(false);
   const [isSavingTerminal, setIsSavingTerminal] = useState(false);
+
+  const syncQuery = (patch: Record<string, string | undefined>) => {
+    const next = new URLSearchParams(searchParams.toString());
+    Object.entries(patch).forEach(([key, value]) => {
+      if (!value) next.delete(key);
+      else next.set(key, value);
+    });
+    router.replace(next.toString() ? `${pathname}?${next.toString()}` : pathname, {
+      scroll: false,
+    });
+  };
 
   const locationOptions = useMemo(
     () =>
@@ -190,13 +239,17 @@ export default function GlobalSettingsPage() {
       setTerminals(nextTerminals);
       setLoyalty(mapLoyalty(loyaltyRes as ApiLoyaltyProgram | undefined));
 
-      const firstLocation = nextLocations.find((loc) => Boolean(loc.id));
+      const initialLocationFromUrl = searchParams.get("location");
+      const locationFromUrl = nextLocations.find((loc) => loc.id === initialLocationFromUrl);
+      const firstLocation = locationFromUrl ?? nextLocations.find((loc) => Boolean(loc.id));
       if (firstLocation?.id) {
         setSelectedLocationId(firstLocation.id);
         hydrateBusinessFromLocation(firstLocation);
       }
 
-      const firstTerminal = nextTerminals.find((terminal) => Boolean(terminal.id));
+      const initialTerminalFromUrl = searchParams.get("terminal");
+      const terminalFromUrl = nextTerminals.find((terminal) => terminal.id === initialTerminalFromUrl);
+      const firstTerminal = terminalFromUrl ?? nextTerminals.find((terminal) => Boolean(terminal.id));
       if (firstTerminal?.id) {
         setSelectedTerminalId(firstTerminal.id);
         hydrateTerminalForm(firstTerminal);
@@ -211,6 +264,13 @@ export default function GlobalSettingsPage() {
   useEffect(() => {
     fetchAll();
   }, []);
+
+  useEffect(() => {
+    syncQuery({
+      location: selectedLocationId || undefined,
+      terminal: selectedTerminalId || undefined,
+    });
+  }, [selectedLocationId, selectedTerminalId]);
 
   useEffect(() => {
     const target = locations.find((loc) => loc.id === selectedLocationId);
@@ -245,6 +305,10 @@ export default function GlobalSettingsPage() {
   };
 
   const saveLoyalty = async () => {
+    if (!isLoyaltyValid(loyalty)) {
+      toast.error("Please fix validation errors before saving.");
+      return;
+    }
     setIsSavingLoyalty(true);
     try {
       await orderzillaApi.dashboard.loyalty.program.update({
@@ -351,41 +415,74 @@ export default function GlobalSettingsPage() {
                 onChange={setSelectedLocationId}
                 options={locationOptions.length ? locationOptions : [{ label: "No locations", value: "" }]}
               />
-              <input
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
+              <ValidatedInput
                 value={business.name}
-                onChange={(e) => setBusiness((prev) => ({ ...prev, name: e.target.value }))}
+                onChange={(v) => setBusiness((prev) => ({ ...prev, name: v }))}
+                rules={[
+                  { type: "required", message: "Business name is required." },
+                  { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+                ]}
+                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                 placeholder="Business name"
               />
-              <input
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
+              <ValidatedInput
                 value={business.address}
-                onChange={(e) => setBusiness((prev) => ({ ...prev, address: e.target.value }))}
+                onChange={(v) => setBusiness((prev) => ({ ...prev, address: v }))}
+                rules={[
+                  { type: "required", message: "Address is required." },
+                  { type: "minLength", value: 2, message: "Address must be at least 2 characters." },
+                ]}
+                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                 placeholder="Address"
               />
-              <input
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
+              <ValidatedInput
                 value={business.city}
-                onChange={(e) => setBusiness((prev) => ({ ...prev, city: e.target.value }))}
+                onChange={(v) => setBusiness((prev) => ({ ...prev, city: v }))}
+                rules={[
+                  { type: "required", message: "City is required." },
+                  { type: "minLength", value: 2, message: "City must be at least 2 characters." },
+                ]}
+                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                 placeholder="City"
               />
               <div className="grid grid-cols-2 gap-2">
-                <input
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
+                <ValidatedInput
                   value={business.country}
-                  onChange={(e) => setBusiness((prev) => ({ ...prev, country: e.target.value }))}
+                  onChange={(v) => setBusiness((prev) => ({ ...prev, country: v }))}
+                  rules={[
+                    {
+                      type: "custom",
+                      validate: (v) =>
+                        v.trim() && !/^[A-Za-z]{2,3}$/.test(v.trim())
+                          ? "Use 2–3 letter country code (e.g. CH, DE)"
+                          : null,
+                    },
+                  ]}
+                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                   placeholder="Country"
                 />
-                <input
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
+                <ValidatedInput
                   value={business.timezone}
-                  onChange={(e) => setBusiness((prev) => ({ ...prev, timezone: e.target.value }))}
-                  placeholder="Timezone"
+                  onChange={(v) => setBusiness((prev) => ({ ...prev, timezone: v }))}
+                  rules={[
+                    { type: "required", message: "Timezone is required." },
+                    {
+                      type: "custom",
+                      validate: (v) =>
+                        v.trim().length < 3
+                          ? "Enter a valid timezone (e.g. Europe/Zurich)"
+                          : !/^[A-Za-z0-9_/+-]+$/.test(v.trim())
+                            ? "Invalid timezone format"
+                            : null,
+                    },
+                  ]}
+                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
+                  placeholder="Timezone (e.g. Europe/Zurich)"
                 />
               </div>
               <button
                 type="button"
-                disabled={!business.id || isSavingBusiness}
+                disabled={!business.id || isSavingBusiness || !isBusinessValid(business)}
                 onClick={saveBusiness}
                 className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
               >
@@ -394,10 +491,14 @@ export default function GlobalSettingsPage() {
             </Card>
 
             <Card title="Loyalty Program">
-              <input
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
+              <ValidatedInput
                 value={loyalty.name}
-                onChange={(e) => setLoyalty((prev) => ({ ...prev, name: e.target.value }))}
+                onChange={(v) => setLoyalty((prev) => ({ ...prev, name: v }))}
+                rules={[
+                  { type: "required", message: "Program name is required." },
+                  { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+                ]}
+                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                 placeholder="Program name"
               />
               <div className="flex items-center justify-between">
@@ -408,58 +509,69 @@ export default function GlobalSettingsPage() {
                 />
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                  value={loyalty.points_per_chf}
-                  onChange={(e) =>
-                    setLoyalty((prev) => ({ ...prev, points_per_chf: Number(e.target.value || 0) }))
+                <ValidatedInput
+                  value={String(loyalty.points_per_chf)}
+                  onChange={(v) =>
+                    setLoyalty((prev) => ({ ...prev, points_per_chf: Number(v) || 0 }))
                   }
+                  rules={[
+                    { type: "number", min: 0, message: "Must be ≥ 0." },
+                  ]}
+                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                   placeholder="Points per CHF"
                 />
-                <input
-                  type="number"
-                  min={0.000001}
-                  step="0.0001"
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                  value={loyalty.chf_per_point}
-                  onChange={(e) =>
-                    setLoyalty((prev) => ({ ...prev, chf_per_point: Number(e.target.value || 0) }))
+                <ValidatedInput
+                  value={String(loyalty.chf_per_point)}
+                  onChange={(v) =>
+                    setLoyalty((prev) => ({ ...prev, chf_per_point: Number(v) || 0 }))
                   }
+                  rules={[
+                    {
+                      type: "custom",
+                      validate: (v) => {
+                        const n = Number(v);
+                        if (!v.trim()) return null;
+                        if (!Number.isFinite(n)) return "Must be a valid number.";
+                        if (n < 0.000001) return "Must be at least 0.000001.";
+                        return null;
+                      },
+                    },
+                  ]}
+                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                   placeholder="CHF per point"
                 />
-                <input
-                  type="number"
-                  min={0}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                  value={loyalty.min_redeem_points}
-                  onChange={(e) =>
-                    setLoyalty((prev) => ({ ...prev, min_redeem_points: Number(e.target.value || 0) }))
+                <ValidatedInput
+                  value={String(loyalty.min_redeem_points)}
+                  onChange={(v) =>
+                    setLoyalty((prev) => ({ ...prev, min_redeem_points: Number(v) || 0 }))
                   }
+                  rules={[
+                    { type: "number", min: 0, integer: true, message: "Must be a whole number ≥ 0." },
+                  ]}
+                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                   placeholder="Min redeem points"
                 />
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                  value={loyalty.max_redeem_percent}
-                  onChange={(e) =>
-                    setLoyalty((prev) => ({ ...prev, max_redeem_percent: Number(e.target.value || 0) }))
+                <ValidatedInput
+                  value={String(loyalty.max_redeem_percent)}
+                  onChange={(v) =>
+                    setLoyalty((prev) => ({ ...prev, max_redeem_percent: Number(v) || 0 }))
                   }
+                  rules={[
+                    { type: "number", min: 0, max: 100, message: "Must be between 0 and 100." },
+                  ]}
+                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                   placeholder="Max redeem %"
                 />
               </div>
-              <input
-                type="number"
-                min={1}
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                value={loyalty.expiry_days}
-                onChange={(e) =>
-                  setLoyalty((prev) => ({ ...prev, expiry_days: Number(e.target.value || 0) }))
+              <ValidatedInput
+                value={String(loyalty.expiry_days)}
+                onChange={(v) =>
+                  setLoyalty((prev) => ({ ...prev, expiry_days: Number(v) || 0 }))
                 }
+                rules={[
+                  { type: "number", min: 1, integer: true, message: "Must be at least 1 day." },
+                ]}
+                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                 placeholder="Expiry days"
               />
               <button
@@ -478,10 +590,14 @@ export default function GlobalSettingsPage() {
                 onChange={setSelectedTerminalId}
                 options={terminalOptions.length ? terminalOptions : [{ label: "No terminals", value: "" }]}
               />
-              <input
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
+              <ValidatedInput
                 value={terminalForm.name}
-                onChange={(e) => setTerminalForm((prev) => ({ ...prev, name: e.target.value }))}
+                onChange={(v) => setTerminalForm((prev) => ({ ...prev, name: v }))}
+                rules={[
+                  { type: "required", message: "Terminal name is required." },
+                  { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+                ]}
+                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                 placeholder="Terminal name"
               />
               <SelectMenu
@@ -501,27 +617,45 @@ export default function GlobalSettingsPage() {
                 className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
                 value={terminalForm.printer_host}
                 onChange={(e) => setTerminalForm((prev) => ({ ...prev, printer_host: e.target.value }))}
-                placeholder="Printer host"
+                placeholder="Printer host (optional)"
               />
               <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="number"
-                  min={1}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                  value={terminalForm.printer_port}
-                  onChange={(e) =>
-                    setTerminalForm((prev) => ({ ...prev, printer_port: Number(e.target.value || 1) }))
+                <ValidatedInput
+                  value={String(terminalForm.printer_port)}
+                  onChange={(v) =>
+                    setTerminalForm((prev) => ({
+                      ...prev,
+                      printer_port: v.trim() ? Number(v) : 0,
+                    }))
                   }
+                  rules={[
+                    {
+                      type: "custom",
+                      validate: (v) => {
+                        const n = Number(v);
+                        if (!v.trim()) return "Port is required.";
+                        if (!Number.isFinite(n) || !Number.isInteger(n))
+                          return "Must be a whole number.";
+                        if (n < 1 || n > 65535) return "Port must be 1–65535.";
+                        return null;
+                      },
+                    },
+                  ]}
+                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                   placeholder="Printer port"
                 />
-                <input
-                  type="number"
-                  min={1}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                  value={terminalForm.printer_width}
-                  onChange={(e) =>
-                    setTerminalForm((prev) => ({ ...prev, printer_width: Number(e.target.value || 1) }))
+                <ValidatedInput
+                  value={String(terminalForm.printer_width)}
+                  onChange={(v) =>
+                    setTerminalForm((prev) => ({
+                      ...prev,
+                      printer_width: v.trim() ? Number(v) : 0,
+                    }))
                   }
+                  rules={[
+                    { type: "number", min: 1, integer: true, message: "Must be at least 1." },
+                  ]}
+                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                   placeholder="Printer width"
                 />
               </div>
@@ -534,7 +668,7 @@ export default function GlobalSettingsPage() {
               </div>
               <button
                 type="button"
-                disabled={!terminalForm.id || isSavingTerminal}
+                disabled={!terminalForm.id || isSavingTerminal || !isTerminalValid(terminalForm)}
                 onClick={saveTerminal}
                 className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
               >

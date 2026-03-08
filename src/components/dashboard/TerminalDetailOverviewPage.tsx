@@ -1,56 +1,155 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
+import SelectMenu from "@/components/dashboard/ui/SelectMenu";
 import { orderzillaApi } from "@/lib/api";
 
 type TerminalDetailOverviewPageProps = {
   id: string;
 };
 
-function Toggle({ on }: { on: boolean }) {
-  return (
-    <span
-      className={`relative inline-flex h-7 w-12 items-center rounded-full border transition ${
-        on ? "bg-[#d7ff3f] border-[#c9f339]" : "bg-[#eceef2] border-[#dde2ea]"
-      }`}
-    >
-      <span
-        className={`h-5 w-5 rounded-full bg-white shadow-sm transition ${
-          on ? "translate-x-6" : "translate-x-1"
-        }`}
-      />
-    </span>
-  );
-}
+type ApiTerminal = {
+  id?: string;
+  terminal_code?: string;
+  name?: string;
+  mode?: "INDOOR" | "TAKEAWAY";
+  status?: "ONLINE" | "OFFLINE" | "MAINTENANCE" | "ERROR";
+  last_heartbeat_at?: string | null;
+  app_version?: string | null;
+  printer_host?: string | null;
+  printer_port?: number;
+  printer_width?: number;
+  is_active?: boolean;
+  location_name?: string;
+  created_at?: string;
+  vitals?: {
+    battery_level?: number;
+    storage_free_mb?: number;
+    network_type?: string;
+  } | null;
+};
 
-function InfoItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-[13px] text-[#6e7785]">{label}</p>
-      <p className="text-[16px] font-semibold text-[#222a35]">{value}</p>
-    </div>
-  );
-}
+const commandOptions = [
+  { label: "Reload Menu", value: "RELOAD_MENU" },
+  { label: "Show Message", value: "SHOW_MESSAGE" },
+  { label: "Maintenance Mode", value: "MAINTENANCE_MODE" },
+  { label: "Clear Maintenance", value: "CLEAR_MAINTENANCE" },
+] as const;
 
 export default function TerminalDetailOverviewPage({
   id,
 }: TerminalDetailOverviewPageProps) {
-  const [terminalName, setTerminalName] = useState(`Terminal #${id.toUpperCase()}`);
-  const [locationName, setLocationName] = useState("Location");
+  const [terminal, setTerminal] = useState<ApiTerminal | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [command, setCommand] =
+    useState<(typeof commandOptions)[number]["value"]>("RELOAD_MENU");
+  const [commandMessage, setCommandMessage] = useState("");
+
+  const [name, setName] = useState("");
+  const [mode, setMode] = useState<"INDOOR" | "TAKEAWAY">("INDOOR");
+  const [printerHost, setPrinterHost] = useState("");
+  const [printerPort, setPrinterPort] = useState("9100");
+  const [printerWidth, setPrinterWidth] = useState("80");
+  const [isActive, setIsActive] = useState(true);
+
+  const syncForm = (data: ApiTerminal) => {
+    setName(data.name ?? "");
+    setMode(data.mode ?? "INDOOR");
+    setPrinterHost(data.printer_host ?? "");
+    setPrinterPort(String(data.printer_port ?? 9100));
+    setPrinterWidth(String(data.printer_width ?? 80));
+    setIsActive(data.is_active ?? true);
+  };
 
   useEffect(() => {
     const run = async () => {
-      setIsLoading(true);
-      const terminal = await orderzillaApi.dashboard.terminals.byId(id);
-      setTerminalName(terminal?.name ?? `Terminal #${id.toUpperCase()}`);
-      setLocationName(terminal?.location_name ?? "Location");
-      setIsLoading(false);
+      try {
+        setIsLoading(true);
+        const response = (await orderzillaApi.dashboard.terminals.byId(id)) as ApiTerminal;
+        setTerminal(response);
+        syncForm(response);
+      } catch {
+        toast.error("Failed to load terminal details.");
+      } finally {
+        setIsLoading(false);
+      }
     };
     run();
   }, [id]);
+
+  const terminalName = terminal?.name ?? `Terminal #${id.toUpperCase()}`;
+  const locationName = terminal?.location_name ?? "Location";
+
+  const lastSeen = useMemo(() => {
+    if (!terminal?.last_heartbeat_at) return "Never";
+    return new Date(terminal.last_heartbeat_at).toLocaleString();
+  }, [terminal?.last_heartbeat_at]);
+
+  const isDirty =
+    name !== (terminal?.name ?? "") ||
+    mode !== (terminal?.mode ?? "INDOOR") ||
+    printerHost !== (terminal?.printer_host ?? "") ||
+    Number(printerPort || 9100) !== (terminal?.printer_port ?? 9100) ||
+    Number(printerWidth || 80) !== (terminal?.printer_width ?? 80) ||
+    isActive !== (terminal?.is_active ?? true);
+
+  const refreshTerminal = async () => {
+    const response = (await orderzillaApi.dashboard.terminals.byId(id)) as ApiTerminal;
+    setTerminal(response);
+    syncForm(response);
+  };
+
+  const saveConfig = async () => {
+    try {
+      setIsSaving(true);
+      await orderzillaApi.dashboard.terminals.update(id, {
+        body: {
+          name: name.trim() || undefined,
+          mode,
+          printer_host: printerHost.trim() || undefined,
+          printer_port: Number(printerPort || 9100),
+          printer_width: Number(printerWidth || 80),
+          is_active: isActive,
+        },
+      });
+      toast.success("Terminal configuration saved.");
+      await refreshTerminal();
+    } catch {
+      toast.error("Failed to save terminal configuration.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const sendCommand = async () => {
+    if (command === "SHOW_MESSAGE" && !commandMessage.trim()) {
+      toast.error("Message is required for SHOW_MESSAGE.");
+      return;
+    }
+    try {
+      setIsSending(true);
+      await orderzillaApi.dashboard.terminals.commands.create(id, {
+        body: {
+          command,
+          payload:
+            command === "SHOW_MESSAGE"
+              ? ({ message: commandMessage.trim() } as unknown as Record<string, never>)
+              : undefined,
+        },
+      });
+      toast.success("Command queued.");
+      if (command === "SHOW_MESSAGE") setCommandMessage("");
+    } catch {
+      toast.error("Failed to queue terminal command.");
+    } finally {
+      setIsSending(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -63,7 +162,7 @@ export default function TerminalDetailOverviewPage({
   return (
     <div className="p-4">
       <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <p className="text-[14px] text-[#7a8291]">
               Locations / {locationName} / {terminalName}
@@ -72,18 +171,21 @@ export default function TerminalDetailOverviewPage({
               {terminalName} Detail
             </h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
-              className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[14px] font-semibold text-[#1d2512]"
+              onClick={saveConfig}
+              disabled={!isDirty || isSaving}
+              className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[14px] font-semibold text-[#1d2512] disabled:opacity-50"
             >
-              Send Command
+              {isSaving ? "Saving..." : "Save Config"}
             </button>
             <button
               type="button"
+              onClick={() => terminal && syncForm(terminal)}
               className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855]"
             >
-              Edit Terminal
+              Reset
             </button>
           </div>
         </div>
@@ -91,25 +193,25 @@ export default function TerminalDetailOverviewPage({
         <div className="mt-3 border-b border-[#e9ebef]">
           <div className="flex items-center gap-8 text-[15px] font-semibold">
             <Link
-              href={`/dashboard/terminals/${id}`}
+              href={`/dashboard/terminals/${id}?tab=overview`}
               className="pb-2 text-[#1f2631] border-b-2 border-[#d4ff00]"
             >
               Overview
             </Link>
             <Link
-              href={`/dashboard/terminals/${id}/display-content`}
+              href={`/dashboard/terminals/${id}/display-content?tab=display-content`}
               className="pb-2 text-[#7a8291] hover:text-[#1f2631]"
             >
               Display Content
             </Link>
             <Link
-              href={`/dashboard/terminals/${id}/functions`}
+              href={`/dashboard/terminals/${id}/functions?tab=functions`}
               className="pb-2 text-[#7a8291] hover:text-[#1f2631]"
             >
               Functions
             </Link>
             <Link
-              href={`/dashboard/terminals/${id}/logs`}
+              href={`/dashboard/terminals/${id}/logs?tab=logs`}
               className="pb-2 text-[#7a8291] hover:text-[#1f2631]"
             >
               Logs
@@ -117,155 +219,143 @@ export default function TerminalDetailOverviewPage({
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-[2fr_1fr] gap-3">
-          <div className="space-y-3">
-            <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-              <h2 className="text-[31px] font-bold text-[#1a212c]">Terminal Information</h2>
-              <div className="mt-3 grid grid-cols-4 gap-4">
-                <InfoItem label="Device Name / ID" value="Kiosk #2 (T2-Kiosk)" />
-                <InfoItem label="Location" value="Downtown Branch" />
-                <InfoItem label="Type" value="Kiosk" />
-                <InfoItem label="Status" value="Online" />
-                <InfoItem label="Last Seen" value="Today, 10:45 AM" />
-                <InfoItem label="Software Version" value="v2.4.1" />
-                <InfoItem label="IP Address" value="192.168.1.105" />
-                <InfoItem label="Serial Number" value="SN-123456789" />
+        <div className="mt-4 grid grid-cols-1 xl:grid-cols-[1.8fr_1fr] gap-3">
+          <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
+            <h2 className="text-[24px] font-bold text-[#1a212c]">Terminal Configuration</h2>
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Name</label>
+                <input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                />
               </div>
-            </article>
-
-            <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-              <h2 className="text-[31px] font-bold text-[#1a212c]">System Health</h2>
-              <div className="mt-3 grid grid-cols-[1.2fr_0.8fr_0.8fr] gap-4">
-                <div className="space-y-3">
-                  <div>
-                    <div className="flex items-center justify-between text-[14px]">
-                      <span className="font-semibold text-[#2f3743]">Storage Usage</span>
-                      <span className="font-semibold text-[#2f3743]">65% Used</span>
-                    </div>
-                    <div className="mt-1 h-2 rounded-full bg-[#eceef2]">
-                      <div className="h-2 w-[65%] rounded-full bg-[#d7ff3f]" />
-                    </div>
-                    <div className="mt-1 flex items-center justify-between text-[13px] text-[#6e7785]">
-                      <span>65% Used</span>
-                      <span>16.5 GB of 25.4 GB</span>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between text-[14px]">
-                      <span className="font-semibold text-[#2f3743]">Memory Usage</span>
-                      <span className="font-semibold text-[#2f3743]">40% Used</span>
-                    </div>
-                    <div className="mt-1 h-2 rounded-full bg-[#eceef2]">
-                      <div className="h-2 w-[40%] rounded-full bg-[#d7ff3f]" />
-                    </div>
-                    <div className="mt-1 flex items-center justify-between text-[13px] text-[#6e7785]">
-                      <span>40% Used</span>
-                      <span>3.2 GB of 8 GB</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex flex-col items-center justify-center">
-                  <p className="text-[14px] font-semibold text-[#2f3743]">CPU Load</p>
-                  <div className="mt-2 h-24 w-24 rounded-full border-[8px] border-[#eceef2] border-t-[#d7ff3f] flex items-center justify-center">
-                    <p className="text-[24px] font-bold text-[#222a35]">25%</p>
-                  </div>
-                  <p className="text-[13px] text-[#6e7785]">Low Load</p>
-                </div>
-
-                <div className="space-y-4">
-                  <div>
-                    <p className="text-[14px] font-semibold text-[#2f3743]">Power Status</p>
-                    <p className="text-[16px] font-semibold text-[#222a35]">AC Connected</p>
-                  </div>
-                  <div>
-                    <p className="text-[14px] font-semibold text-[#2f3743]">Network Status</p>
-                    <p className="text-[16px] font-semibold text-[#222a35]">Connected</p>
-                  </div>
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Mode</label>
+                <div className="mt-1">
+                  <SelectMenu
+                    value={mode}
+                    onChange={(value) => setMode(value as "INDOOR" | "TAKEAWAY")}
+                    options={[
+                      { label: "Indoor", value: "INDOOR" },
+                      { label: "Takeaway", value: "TAKEAWAY" },
+                    ]}
+                    className="w-full"
+                  />
                 </div>
               </div>
-
-              <div className="mt-4 border-t border-[#eceff3] pt-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-[31px] font-bold text-[#1a212c]">Quick Actions</h3>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[16px] font-semibold text-[#2f3743]">Active</span>
-                    <Toggle on />
-                  </div>
-                </div>
-                <div className="mt-2 flex items-center gap-2 flex-wrap">
-                  {["Send Message", "Reload Menu", "Enter Maintenance Mode", "Reboot"].map(
-                    (action, idx) => (
-                      <button
-                        type="button"
-                        key={action}
-                        className={`h-10 rounded-lg border px-4 text-[14px] font-semibold ${
-                          idx === 3
-                            ? "border-[#e5e7eb] bg-[#f4f6f8] text-[#9da5b2]"
-                            : "border-[#dfe3e8] bg-white text-[#3f4653]"
-                        }`}
-                      >
-                        {action}
-                      </button>
-                    ),
-                  )}
-                </div>
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Printer Host</label>
+                <input
+                  value={printerHost}
+                  onChange={(event) => setPrinterHost(event.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                  placeholder="192.168.1.50"
+                />
               </div>
-            </article>
-          </div>
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Printer Port</label>
+                <input
+                  type="number"
+                  value={printerPort}
+                  onChange={(event) => setPrinterPort(event.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                />
+              </div>
+              <div>
+                <label className="text-[12px] text-[#6e7785]">Printer Width (mm)</label>
+                <input
+                  type="number"
+                  value={printerWidth}
+                  onChange={(event) => setPrinterWidth(event.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                />
+              </div>
+              <label className="flex items-center gap-2 text-[13px] font-semibold text-[#2f3743]">
+                <input
+                  type="checkbox"
+                  checked={isActive}
+                  onChange={(event) => setIsActive(event.target.checked)}
+                  className="h-4 w-4 rounded border-[#cfd5de]"
+                />
+                Terminal is active
+              </label>
+            </div>
+          </article>
 
           <div className="space-y-3">
             <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-              <h2 className="text-[31px] font-bold text-[#1a212c]">Activity / Event Log</h2>
-              <div className="mt-3 space-y-3">
-                {[
-                  { title: "Device Registered", time: "Oct 10, 2023 - 9:00 AM", active: true },
-                  { title: "Software Updated to v2.4.1", time: "Oct 25, 2023 - 2:30 PM", active: true },
-                  { title: "Menu Reloaded", time: "Today - 10:30 AM", active: true, current: true },
-                  { title: "Status Changed: Offline -> Online", time: "Today - 10:40 AM", active: false },
-                  { title: "Error Detected: Printer Jam", time: "Today - 10:43 AM", active: false },
-                ].map((item, idx, arr) => (
-                  <div key={item.title} className="flex items-start gap-3">
-                    <div className="flex flex-col items-center">
-                      <span
-                        className={`h-3.5 w-3.5 rounded-full ${
-                          item.current
-                            ? "bg-[#d7ff3f] ring-4 ring-[#eef8cb]"
-                            : item.active
-                              ? "bg-[#22b35a]"
-                              : "bg-white border border-[#cfd5de]"
-                        }`}
-                      />
-                      {idx !== arr.length - 1 && (
-                        <span className="mt-1 h-7 w-[2px] bg-[#dfe4ea]" />
-                      )}
-                    </div>
-                    <div>
-                      <p className="text-[16px] font-semibold text-[#222a35]">{item.title}</p>
-                      <p className="text-[13px] text-[#6e7785]">{item.time}</p>
-                    </div>
-                  </div>
-                ))}
+              <h2 className="text-[24px] font-bold text-[#1a212c]">Live Status</h2>
+              <div className="mt-3 space-y-2 text-[13px]">
+                <p className="text-[#6e7785]">
+                  Code: <span className="font-semibold text-[#2f3743]">{terminal?.terminal_code ?? "-"}</span>
+                </p>
+                <p className="text-[#6e7785]">
+                  Status: <span className="font-semibold text-[#2f3743]">{terminal?.status ?? "-"}</span>
+                </p>
+                <p className="text-[#6e7785]">
+                  Last heartbeat: <span className="font-semibold text-[#2f3743]">{lastSeen}</span>
+                </p>
+                <p className="text-[#6e7785]">
+                  App version: <span className="font-semibold text-[#2f3743]">{terminal?.app_version ?? "-"}</span>
+                </p>
+                <p className="text-[#6e7785]">
+                  Battery:{" "}
+                  <span className="font-semibold text-[#2f3743]">
+                    {terminal?.vitals?.battery_level ?? "-"}
+                    {terminal?.vitals?.battery_level !== undefined ? "%" : ""}
+                  </span>
+                </p>
+                <p className="text-[#6e7785]">
+                  Storage free:{" "}
+                  <span className="font-semibold text-[#2f3743]">
+                    {terminal?.vitals?.storage_free_mb ?? "-"}
+                    {terminal?.vitals?.storage_free_mb !== undefined ? " MB" : ""}
+                  </span>
+                </p>
+                <p className="text-[#6e7785]">
+                  Network:{" "}
+                  <span className="font-semibold text-[#2f3743]">{terminal?.vitals?.network_type ?? "-"}</span>
+                </p>
+                <p className="text-[#6e7785]">
+                  Created:{" "}
+                  <span className="font-semibold text-[#2f3743]">
+                    {terminal?.created_at ? new Date(terminal.created_at).toLocaleString() : "-"}
+                  </span>
+                </p>
               </div>
             </article>
 
             <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-              <h2 className="text-[31px] font-bold text-[#1a212c]">Assigned Locations</h2>
+              <h2 className="text-[24px] font-bold text-[#1a212c]">Command Center</h2>
               <div className="mt-3 space-y-2">
-                {[
-                  { name: "Downtown Branch", on: true },
-                  { name: "Westside Mall", on: false },
-                ].map((loc) => (
-                  <div key={loc.name} className="flex items-center justify-between">
-                    <span className="text-[16px] font-semibold text-[#2f3743]">{loc.name}</span>
-                    <Toggle on={loc.on} />
-                  </div>
-                ))}
+                <SelectMenu
+                  value={command}
+                  onChange={(value) =>
+                    setCommand(value as (typeof commandOptions)[number]["value"])
+                  }
+                  options={commandOptions.map((item) => ({
+                    label: item.label,
+                    value: item.value,
+                  }))}
+                  className="w-full"
+                />
+                {command === "SHOW_MESSAGE" ? (
+                  <textarea
+                    value={commandMessage}
+                    onChange={(event) => setCommandMessage(event.target.value)}
+                    className="h-24 w-full rounded-lg border border-[#dfe3e8] px-3 py-2 text-[13px]"
+                    placeholder="Message shown on terminal"
+                  />
+                ) : null}
                 <button
                   type="button"
-                  className="mt-2 h-10 w-full rounded-lg border border-[#dfe3e8] bg-white px-3 text-left text-[14px] text-[#6e7785]"
+                  onClick={sendCommand}
+                  disabled={isSending}
+                  className="h-10 w-full rounded-lg bg-[#d4ff00] px-4 text-[13px] font-semibold text-[#1d2512] disabled:opacity-50"
                 >
-                  Reassign Locations...
+                  {isSending ? "Sending..." : "Send Command"}
                 </button>
               </div>
             </article>

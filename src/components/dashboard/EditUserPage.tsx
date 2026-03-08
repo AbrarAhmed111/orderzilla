@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api";
+import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
+import { validateField } from "@/lib/validation";
 
 type EditUserPageProps = {
   id: string;
@@ -26,13 +29,20 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => v
   );
 }
 
+type UserRole = "OWNER" | "ADMIN" | "MANAGER" | "VIEWER";
+
 export default function EditUserPage({ id }: EditUserPageProps) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"ADMIN" | "MANAGER" | "VIEWER">("MANAGER");
+  const [role, setRole] = useState<UserRole>("MANAGER");
   const [active, setActive] = useState(true);
+  const [isOwner, setIsOwner] = useState(false);
+  const [createdAt, setCreatedAt] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState("");
 
   const fetchUser = async () => {
@@ -40,10 +50,13 @@ export default function EditUserPage({ id }: EditUserPageProps) {
       setIsLoading(true);
       setError("");
       const user = await orderzillaApi.dashboard.users.byId(id);
+      const userRole = (user?.role as UserRole) ?? "MANAGER";
       setName(user?.name ?? "");
       setEmail(user?.email ?? "");
-      setRole((user?.role as "ADMIN" | "MANAGER" | "VIEWER") ?? "MANAGER");
+      setRole(userRole);
       setActive(user?.is_active ?? true);
+      setIsOwner(userRole === "OWNER");
+      setCreatedAt(user?.created_at ? new Date(user.created_at).toLocaleString() : "-");
     } catch {
       setError("Failed to load user.");
     } finally {
@@ -56,24 +69,60 @@ export default function EditUserPage({ id }: EditUserPageProps) {
   }, [id]);
 
   const onSave = async () => {
+    if (isOwner) return;
     try {
       setIsSaving(true);
       await orderzillaApi.dashboard.users.update(id, {
         body: { name, role, is_active: active },
       });
+      toast.success("User updated.");
+    } catch (err: unknown) {
+      const msg = err && typeof err === "object" && "error" in err ? String((err as { error: string }).error) : "";
+      toast.error(msg === "cannot_modify_owner" ? "Owner accounts cannot be modified." : "Failed to update user.");
     } finally {
       setIsSaving(false);
     }
   };
 
   const onDelete = async () => {
-    await orderzillaApi.dashboard.users.remove(id);
+    if (isOwner) return;
+    try {
+      setIsDeleting(true);
+      await orderzillaApi.dashboard.users.remove(id);
+      toast.success("User deleted.");
+    } catch (err: unknown) {
+      const msg = err && typeof err === "object" && "error" in err ? String((err as { error: string }).error) : "";
+      toast.error(msg === "cannot_modify_owner" ? "Owner accounts cannot be deleted." : "Failed to delete user.");
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
+  const nameError = validateField(name, [
+    { type: "required", message: "Name is required." },
+    { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+  ]);
+  const passwordError = validateField(newPassword, [
+    { type: "required", message: "Password is required." },
+    { type: "minLength", value: 8, message: "Password must be at least 8 characters." },
+  ]);
+  const isFormValid = !nameError;
+  const isResetPasswordValid = newPassword.length > 0 && !passwordError;
+
   const onResetPassword = async () => {
-    await orderzillaApi.dashboard.users.resetPassword(id, {
-      body: { new_password: "Temp@123456" },
-    });
+    if (!isResetPasswordValid || passwordError || isOwner) return;
+    try {
+      setIsResettingPassword(true);
+      await orderzillaApi.dashboard.users.resetPassword(id, {
+        body: { new_password: newPassword },
+      });
+      setNewPassword("");
+      toast.success("Password reset.");
+    } catch {
+      toast.error("Failed to reset password.");
+    } finally {
+      setIsResettingPassword(false);
+    }
   };
 
   if (isLoading) {
@@ -92,20 +141,23 @@ export default function EditUserPage({ id }: EditUserPageProps) {
             {error}
           </div>
         ) : null}
+        {isOwner ? (
+          <div className="mb-3 rounded-lg border border-[#e5e7eb] bg-[#f8f9fb] px-3 py-2 text-[12px] text-[#6e7785]">
+            Owner accounts cannot be modified. Role, status, and delete actions are disabled.
+          </div>
+        ) : null}
         <div className="flex items-center justify-between">
           <div>
             <p className="text-[14px] text-[#7a8291]">Users / {name || "User"} / Edit</p>
-            <h1 className="text-[44px] leading-none font-extrabold text-[#1a2029] mt-1">
-              Edit User
-            </h1>
+            <h1 className="text-[44px] leading-none font-extrabold text-[#1a2029] mt-1">Edit User</h1>
             <p className="text-[12px] text-[#9aa3ae] mt-1">User ID: {id}</p>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={onSave}
-              disabled={isSaving}
-              className="h-10 rounded-lg bg-[#d4ff00] px-6 text-[14px] font-semibold text-[#1d2512]"
+              disabled={isSaving || !isFormValid || isOwner}
+              className="h-10 rounded-lg bg-[#d4ff00] px-6 text-[14px] font-semibold text-[#1d2512] disabled:opacity-50"
             >
               {isSaving ? "Saving..." : "Save"}
             </button>
@@ -117,196 +169,109 @@ export default function EditUserPage({ id }: EditUserPageProps) {
             </button>
             <button
               type="button"
+              disabled={isDeleting || isOwner}
               onClick={onDelete}
-              className="h-10 rounded-lg border border-[#efc3c3] bg-white px-6 text-[14px] font-semibold text-[#cf4a4a]"
+              className="h-10 rounded-lg border border-[#efc3c3] bg-white px-6 text-[14px] font-semibold text-[#cf4a4a] disabled:opacity-50"
             >
-              Delete User
+              {isDeleting ? "Deleting..." : "Delete User"}
             </button>
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-[2fr_1fr] gap-3">
-          <div className="space-y-3">
-            <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-              <h2 className="text-[31px] font-bold text-[#1a212c]">Basic Information</h2>
-              <div className="mt-3 grid grid-cols-[1fr_1fr_90px] gap-3">
-                <div>
-                  <label className="text-[14px] font-semibold text-[#4e5664]">First Name</label>
-                  <input
-                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px]"
-                    value={name.split(" ")[0] ?? ""}
-                    onChange={(e) => {
-                      const last = name.split(" ").slice(1).join(" ");
-                      setName(`${e.target.value} ${last}`.trim());
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className="text-[14px] font-semibold text-[#4e5664]">Last Name</label>
-                  <input
-                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px]"
-                    value={name.split(" ").slice(1).join(" ")}
-                    onChange={(e) => {
-                      const first = name.split(" ")[0] ?? "";
-                      setName(`${first} ${e.target.value}`.trim());
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className="text-[14px] font-semibold text-[#4e5664]">Avatar</label>
-                  <div className="mt-1 h-14 w-14 rounded-full bg-[#ffd7b1] flex items-center justify-center text-[16px] font-bold text-[#7a4f21]">
-                    JS
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[14px] font-semibold text-[#4e5664]">Email</label>
-                  <input
-                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px]"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="text-[14px] font-semibold text-[#4e5664]">
-                    Phone <span className="font-normal text-[#7a8291]">(optional)</span>
-                  </label>
-                  <input
-                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px]"
-                    defaultValue="+1 555 123 4567"
-                  />
-                </div>
-                <div className="flex items-end">
-                  <button
-                    type="button"
-                    className="h-10 w-full rounded-lg border border-[#dfe3e8] bg-white text-[14px] font-semibold text-[#3f4653]"
-                  >
-                    Upload
-                  </button>
-                </div>
+        <div className="mt-4 grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-3">
+          <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
+            <h2 className="text-[31px] font-bold text-[#1a212c]">User Configuration</h2>
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="md:col-span-2">
+                <label className="text-[14px] font-semibold text-[#4e5664]">Name</label>
+                <ValidatedInput
+                  value={name}
+                  onChange={setName}
+                  rules={[
+                    { type: "required", message: "Name is required." },
+                    { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+                  ]}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none focus:border-[#c0eb1a]"
+                />
               </div>
-            </article>
-
-            <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-              <h2 className="text-[31px] font-bold text-[#1a212c]">Role & Permissions</h2>
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[14px] font-semibold text-[#4e5664]">Role</label>
-                  <select
-                    value={role}
-                    onChange={(e) => setRole(e.target.value as "ADMIN" | "MANAGER" | "VIEWER")}
-                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-left text-[14px] text-[#2f3743]"
-                  >
-                    <option value="ADMIN">Admin</option>
-                    <option value="MANAGER">Manager</option>
-                    <option value="VIEWER">Viewer</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[14px] font-semibold text-[#4e5664]">Location Access</label>
-                  <button
-                    type="button"
-                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-left text-[14px] text-[#2f3743]"
-                  >
-                    Downtown Branch, Westside Mall
-                  </button>
-                  <div className="mt-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[16px] font-semibold text-[#2f3743]">Can manage products</span>
-                      <Toggle on />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[16px] font-semibold text-[#2f3743]">Can manage loyalty</span>
-                      <Toggle on={false} />
-                    </div>
-                  </div>
-                </div>
+              <div className="md:col-span-2">
+                <label className="text-[14px] font-semibold text-[#4e5664]">Email</label>
+                <ValidatedInput
+                  type="email"
+                  value={email}
+                  onChange={setEmail}
+                  rules={[
+                    { type: "required", message: "Email is required." },
+                    { type: "email", message: "Enter a valid email address." },
+                  ]}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none focus:border-[#c0eb1a]"
+                />
               </div>
-            </article>
-
-            <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-              <h2 className="text-[31px] font-bold text-[#1a212c]">Security Settings</h2>
-              <div className="mt-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[16px] font-semibold text-[#2f3743]">Active</span>
-                  <div className="flex items-center gap-2">
-                    <Toggle on={active} onToggle={setActive} />
-                    <button
-                      type="button"
-                      onClick={onResetPassword}
-                      className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#3f4653]"
-                    >
-                      Send password reset link
-                    </button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[16px] font-semibold text-[#2f3743]">
-                    Require password reset on next login
-                  </span>
-                  <Toggle on={false} />
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[16px] font-semibold text-[#2f3743]">
-                    Two-factor authentication
-                  </span>
-                  <span className="rounded-full bg-[#d5f5dc] px-2.5 py-1 text-[12px] font-semibold text-[#2a6b39]">
-                    Enabled
-                  </span>
-                </div>
+              <div>
+                <label className="text-[14px] font-semibold text-[#4e5664]">Role</label>
+                <select
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as UserRole)}
+                  disabled={isOwner}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-left text-[14px] text-[#2f3743] disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <option value="OWNER">Owner</option>
+                  <option value="ADMIN">Admin</option>
+                  <option value="MANAGER">Manager</option>
+                  <option value="VIEWER">Viewer</option>
+                </select>
               </div>
-            </article>
-          </div>
+              <div className="flex items-end">
+                <label className="inline-flex items-center gap-2 text-[14px] font-semibold text-[#2f3743]">
+                  <Toggle on={active} onToggle={isOwner ? undefined : setActive} />
+                  {active ? "Active" : "Inactive"}
+                </label>
+              </div>
+            </div>
+          </article>
 
           <div className="space-y-3">
             <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
               <h2 className="text-[31px] font-bold text-[#1a212c]">Account Summary</h2>
               <div className="mt-3 space-y-2">
                 <div>
-                  <p className="text-[13px] text-[#6e7785]">Last login date</p>
-                  <p className="text-[16px] font-semibold text-[#2f3743]">Yesterday, 3:20 PM</p>
+                  <p className="text-[13px] text-[#6e7785]">Account created</p>
+                  <p className="text-[16px] font-semibold text-[#2f3743]">{createdAt}</p>
                 </div>
                 <div>
-                  <p className="text-[13px] text-[#6e7785]">Account created date</p>
-                  <p className="text-[16px] font-semibold text-[#2f3743]">Oct 15, 2023</p>
-                </div>
-                <div>
-                  <p className="text-[13px] text-[#6e7785]">Created by</p>
-                  <p className="text-[16px] font-semibold text-[#2f3743]">Anna Meier</p>
-                </div>
-                <div>
-                  <p className="text-[13px] text-[#6e7785]">Login activity summary</p>
-                  <ul className="mt-1 text-[13px] text-[#2f3743] space-y-1 list-disc pl-4">
-                    <li>Oct 26 - 3:20 PM (Success)</li>
-                    <li>Oct 25 - 11:02 AM (Success)</li>
-                    <li>Oct 24 - 9:45 AM (Failed attempt)</li>
-                  </ul>
+                  <p className="text-[13px] text-[#6e7785]">User ID</p>
+                  <p className="text-[16px] font-semibold text-[#2f3743]">{id}</p>
                 </div>
               </div>
             </article>
 
             <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-              <h2 className="text-[31px] font-bold text-[#c33f3f]">Danger Zone</h2>
-              <div className="mt-2 space-y-2">
+              <h2 className="text-[31px] font-bold text-[#1a212c]">Reset Password</h2>
+              {isOwner ? (
+                <p className="mt-3 text-[13px] text-[#6e7785]">Owner accounts cannot be modified.</p>
+              ) : (
+              <div className="mt-3 space-y-2">
+                <ValidatedInput
+                  type="password"
+                  value={newPassword}
+                  onChange={setNewPassword}
+                  rules={[
+                    { type: "required", message: "Password is required." },
+                    { type: "minLength", value: 8, message: "Password must be at least 8 characters." },
+                  ]}
+                  className="h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none focus:border-[#c0eb1a]"
+                  placeholder="New password (min 8 chars)"
+                />
                 <button
                   type="button"
                   onClick={onResetPassword}
-                  className="h-10 w-full rounded-lg border border-[#efc3c3] bg-white text-[14px] font-semibold text-[#cf4a4a]"
+                  disabled={isResettingPassword || !isResetPasswordValid}
+                  className="h-10 w-full rounded-lg border border-[#dfe3e8] bg-white text-[14px] font-semibold text-[#3f4653] disabled:opacity-50"
                 >
-                  Reset Password
+                  {isResettingPassword ? "Resetting..." : "Reset Password"}
                 </button>
-                <button
-                  type="button"
-                  onClick={onDelete}
-                  className="h-10 w-full rounded-lg bg-[#de2f2f] text-[14px] font-semibold text-white"
-                >
-                  Delete User
-                </button>
-                <p className="text-[14px] text-[#6e7785] text-center pt-1">
-                  Are you sure you want to delete
-                  <br />
-                  {name || "this user"}?
-                </p>
               </div>
+              )}
             </article>
           </div>
         </div>

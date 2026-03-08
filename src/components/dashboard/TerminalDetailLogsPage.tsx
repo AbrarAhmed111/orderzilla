@@ -1,99 +1,211 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronDown, Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
+import SelectMenu from "@/components/dashboard/ui/SelectMenu";
+import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api";
 
 type TerminalDetailLogsPageProps = {
   id: string;
 };
 
-function Toggle({ on }: { on: boolean }) {
-  return (
-    <span
-      className={`relative inline-flex h-7 w-12 items-center rounded-full border transition ${
-        on ? "bg-[#d7ff3f] border-[#c9f339]" : "bg-[#eceef2] border-[#dde2ea]"
-      }`}
-    >
-      <span
-        className={`h-5 w-5 rounded-full bg-white shadow-sm transition ${
-          on ? "translate-x-6" : "translate-x-1"
-        }`}
-      />
-    </span>
-  );
-}
+type ApiTerminal = {
+  id?: string;
+  terminal_code?: string;
+  name?: string;
+  location_name?: string;
+  status?: "ONLINE" | "OFFLINE" | "MAINTENANCE" | "ERROR";
+  mode?: "INDOOR" | "TAKEAWAY";
+  is_active?: boolean;
+  app_version?: string | null;
+  created_at?: string;
+  last_heartbeat_at?: string | null;
+  vitals?: {
+    battery_level?: number;
+    storage_free_mb?: number;
+    network_type?: string;
+  } | null;
+};
 
-function levelClass(level: string) {
+type TerminalEvent = {
+  id: string;
+  at: string;
+  level: "Info" | "Warning" | "Error" | "Success";
+  event: string;
+  message: string;
+  source: string;
+};
+
+function levelClass(level: TerminalEvent["level"]) {
   if (level === "Info") return "bg-[#cfe2ff] text-[#2457a6]";
   if (level === "Success") return "bg-[#d5f5dc] text-[#2a6b39]";
   if (level === "Warning") return "bg-[#fde8be] text-[#855100]";
-  if (level === "Error") return "bg-[#f8d2d2] text-[#8f2a2a]";
-  return "bg-[#ead4d4] text-[#7e2222]";
+  return "bg-[#f8d2d2] text-[#8f2a2a]";
 }
 
-const logs = [
-  {
-    timestamp: "Oct 26, 2023 - 12:45:30 PM",
-    level: "Info",
-    event: "System Startup",
-    message: "Terminal initialized successfully. Software version v2.4.1 loaded.",
-    source: "System",
-  },
-  {
-    timestamp: "Oct 26, 2023 - 12:48:15 PM",
-    level: "Success",
-    event: "Menu Reload",
-    message: "Menu data reloaded from server.",
-    source: "User Action",
-  },
-  {
-    timestamp: "Oct 26, 2023 - 12:52:10 PM",
-    level: "Warning",
-    event: "Network Stability",
-    message: "Intermittent connectivity detected.",
-    source: "Network",
-  },
-  {
-    timestamp: "Oct 26, 2023 - 1:05:45 PM",
-    level: "Error",
-    event: "Payment Failure",
-    message: "Transaction declined by payment gateway. Error code: 1024.",
-    source: "Payment",
-  },
-  {
-    timestamp: "Oct 26, 2023 - 1:10:20 PM",
-    level: "Critib1B",
-    event: "Hardware Error",
-    message: "Printer paper jam detected. Requires manual intervention.",
-    source: "Hardware",
-  },
-  {
-    timestamp: "Oct 26, 2023 - 1:15:00 PM",
-    level: "Info",
-    event: "Idle State",
-    message: "Terminal entered idle mode after 120 seconds.",
-    source: "System",
-  },
-];
-
 export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPageProps) {
-  const [terminalName, setTerminalName] = useState(`Terminal #${id.toUpperCase()}`);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const page = Number(searchParams.get("page") ?? "1") || 1;
+  const limit = Number(searchParams.get("limit") ?? "10") || 10;
+  const q = searchParams.get("q") ?? "";
+  const level = searchParams.get("level") ?? "all";
+
+  const [terminalName, setTerminalName] = useState(`Terminal #${id.slice(0, 6).toUpperCase()}`);
   const [locationName, setLocationName] = useState("Location");
+  const [events, setEvents] = useState<TerminalEvent[]>([]);
+  const [selectedEvent, setSelectedEvent] = useState<TerminalEvent | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [searchInput, setSearchInput] = useState(q);
+
+  const syncQuery = useCallback(
+    (patch: Record<string, string | number | undefined>) => {
+      const next = new URLSearchParams(searchParams.toString());
+      Object.entries(patch).forEach(([key, value]) => {
+        if (value === undefined || value === "" || value === "all") next.delete(key);
+        else next.set(key, String(value));
+      });
+      router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  useEffect(() => {
+    setSearchInput(q);
+  }, [q]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      syncQuery({ q: searchInput.trim() || undefined, page: 1 });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchInput, syncQuery]);
 
   useEffect(() => {
     const run = async () => {
-      setIsLoading(true);
-      const terminal = await orderzillaApi.dashboard.terminals.byId(id);
-      setTerminalName(terminal?.name ?? `Terminal #${id.toUpperCase()}`);
-      setLocationName(terminal?.location_name ?? "Location");
-      setIsLoading(false);
+      try {
+        setIsLoading(true);
+        const terminal = (await orderzillaApi.dashboard.terminals.byId(id)) as ApiTerminal;
+        setTerminalName(terminal?.name ?? `Terminal #${id.slice(0, 6).toUpperCase()}`);
+        setLocationName(terminal?.location_name ?? "Location");
+
+        const derivedEvents: TerminalEvent[] = [
+          {
+            id: "created",
+            at: terminal.created_at ?? new Date().toISOString(),
+            level: "Info",
+            event: "Terminal Registered",
+            message: `Terminal ${terminal.terminal_code ?? terminal.name ?? id} created.`,
+            source: "Backend",
+          },
+          {
+            id: "status",
+            at: terminal.last_heartbeat_at ?? terminal.created_at ?? new Date().toISOString(),
+            level:
+              terminal.status === "ERROR"
+                ? "Error"
+                : terminal.status === "MAINTENANCE"
+                  ? "Warning"
+                  : "Success",
+            event: "Current Status",
+            message: `Status is ${terminal.status ?? "UNKNOWN"} and mode is ${terminal.mode ?? "-"}.`,
+            source: "Terminal",
+          },
+          {
+            id: "heartbeat",
+            at: terminal.last_heartbeat_at ?? terminal.created_at ?? new Date().toISOString(),
+            level: terminal.last_heartbeat_at ? "Success" : "Warning",
+            event: "Heartbeat",
+            message: terminal.last_heartbeat_at
+              ? `Last heartbeat at ${new Date(terminal.last_heartbeat_at).toLocaleString()}.`
+              : "No heartbeat received yet.",
+            source: "Terminal",
+          },
+          {
+            id: "vitals",
+            at: terminal.last_heartbeat_at ?? terminal.created_at ?? new Date().toISOString(),
+            level: "Info",
+            event: "Vitals Snapshot",
+            message: `Battery ${terminal.vitals?.battery_level ?? "-"}%, storage ${terminal.vitals?.storage_free_mb ?? "-"}MB, network ${terminal.vitals?.network_type ?? "-"}.`,
+            source: "System",
+          },
+          {
+            id: "activity",
+            at: terminal.last_heartbeat_at ?? terminal.created_at ?? new Date().toISOString(),
+            level: terminal.is_active ? "Success" : "Warning",
+            event: "Activation State",
+            message: terminal.is_active
+              ? "Terminal is active and can receive commands."
+              : "Terminal is inactive.",
+            source: "Backend",
+          },
+        ];
+        setEvents(derivedEvents);
+        setSelectedEvent(derivedEvents[0] ?? null);
+      } catch {
+        toast.error("Failed to load terminal logs view.");
+      } finally {
+        setIsLoading(false);
+      }
     };
     run();
   }, [id]);
+
+  const filteredEvents = useMemo(() => {
+    let data = events;
+    if (q.trim()) {
+      const keyword = q.trim().toLowerCase();
+      data = data.filter(
+        (item) =>
+          item.event.toLowerCase().includes(keyword) ||
+          item.message.toLowerCase().includes(keyword) ||
+          item.source.toLowerCase().includes(keyword),
+      );
+    }
+    if (level !== "all") data = data.filter((item) => item.level.toLowerCase() === level);
+    return data;
+  }, [events, level, q]);
+
+  const totalItems = filteredEvents.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / limit));
+  const currentPage = Math.min(page, totalPages);
+  const paginatedEvents = useMemo(() => {
+    const start = (currentPage - 1) * limit;
+    return filteredEvents.slice(start, start + limit);
+  }, [currentPage, filteredEvents, limit]);
+
+  const exportEvents = () => {
+    if (filteredEvents.length === 0) {
+      toast("No events to export.");
+      return;
+    }
+    const csv = [
+      "timestamp,level,event,message,source",
+      ...filteredEvents.map((item) =>
+        [
+          JSON.stringify(new Date(item.at).toISOString()),
+          JSON.stringify(item.level),
+          JSON.stringify(item.event),
+          JSON.stringify(item.message),
+          JSON.stringify(item.source),
+        ].join(","),
+      ),
+    ].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `terminal-${id}-events.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   if (isLoading) {
     return (
@@ -118,41 +230,42 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={exportEvents}
               className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[14px] font-semibold text-[#1d2512]"
             >
-              Export Logs
+              Export Events
             </button>
-            <button
-              type="button"
-              className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855]"
+            <Link
+              href="/dashboard/endpoints-missing"
+              className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855] inline-flex items-center"
             >
               Clear Logs
-            </button>
+            </Link>
           </div>
         </div>
 
         <div className="mt-3 border-b border-[#e9ebef]">
           <div className="flex items-center gap-8 text-[15px] font-semibold">
             <Link
-              href={`/dashboard/terminals/${id}`}
+              href={`/dashboard/terminals/${id}?tab=overview`}
               className="pb-2 text-[#7a8291] hover:text-[#1f2631]"
             >
               Overview
             </Link>
             <Link
-              href={`/dashboard/terminals/${id}/display-content`}
+              href={`/dashboard/terminals/${id}/display-content?tab=display-content`}
               className="pb-2 text-[#7a8291] hover:text-[#1f2631]"
             >
               Display Content
             </Link>
             <Link
-              href={`/dashboard/terminals/${id}/functions`}
+              href={`/dashboard/terminals/${id}/functions?tab=functions`}
               className="pb-2 text-[#7a8291] hover:text-[#1f2631]"
             >
               Functions
             </Link>
             <Link
-              href={`/dashboard/terminals/${id}/logs`}
+              href={`/dashboard/terminals/${id}/logs?tab=logs`}
               className="pb-2 text-[#1f2631] border-b-2 border-[#d4ff00]"
             >
               Logs
@@ -161,36 +274,31 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
         </div>
 
         <div className="mt-3 rounded-lg border border-[#e4e6ea] p-3">
-          <p className="text-[15px] font-semibold text-[#2f3743]">Filters & Controls Row</p>
-          <div className="mt-2 grid grid-cols-[1.5fr_0.7fr_0.7fr_1fr_auto] gap-2 items-center">
+          <p className="text-[15px] font-semibold text-[#2f3743]">Filters</p>
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-[1.5fr_0.7fr] gap-2 items-center">
             <div className="h-10 rounded-lg border border-[#e4e6ea] bg-white px-3 flex items-center gap-2">
               <Search size={16} className="text-[#97a0ad]" />
               <input
-                placeholder="Search by keyword, error code, or event..."
+                type="search"
+                autoComplete="off"
+                placeholder="Search by event, source, or message"
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
                 className="w-full text-[14px] text-[#2f3642] outline-none placeholder:text-[#9aa3ae]"
               />
             </div>
-            <button className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-3 inline-flex items-center justify-between text-[14px] text-[#2f3743]">
-              <span>Last 24 Hours</span>
-              <ChevronDown size={14} />
-            </button>
-            <button className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-3 inline-flex items-center justify-between text-[14px] text-[#2f3743]">
-              <span>All</span>
-              <ChevronDown size={14} />
-            </button>
-            <div className="flex items-center gap-4 justify-center">
-              <div className="flex items-center gap-2">
-                <span className="text-[14px] text-[#2f3743]">On</span>
-                <Toggle on />
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[14px] text-[#2f3743]">On</span>
-                <Toggle on />
-              </div>
-            </div>
-            <button className="h-10 w-10 rounded-lg border border-[#dfe3e8] bg-white text-[#7d8593]">
-              C
-            </button>
+            <SelectMenu
+              value={level}
+              onChange={(value) => syncQuery({ level: value, page: 1 })}
+              options={[
+                { label: "All Levels", value: "all" },
+                { label: "Info", value: "info" },
+                { label: "Success", value: "success" },
+                { label: "Warning", value: "warning" },
+                { label: "Error", value: "error" },
+              ]}
+              className="w-full"
+            />
           </div>
         </div>
 
@@ -211,19 +319,22 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
                 </tr>
               </thead>
               <tbody>
-                {logs.map((log, idx) => (
+                {paginatedEvents.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-10 text-center text-[13px] text-[#717c8e]">
+                      No events found.
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedEvents.map((log) => (
                   <tr
-                    key={`${log.timestamp}-${idx}`}
-                    className={`border-b last:border-b-0 border-[#edf0f4] text-[14px] ${
-                      idx === 3 ? "bg-[#f4f6f8]" : "bg-white"
-                    }`}
+                    key={log.id}
+                    className="border-b last:border-b-0 border-[#edf0f4] text-[14px] bg-white"
                   >
-                    <td className="px-3 py-3 text-[#2f3743]">{log.timestamp}</td>
+                    <td className="px-3 py-3 text-[#2f3743]">{new Date(log.at).toLocaleString()}</td>
                     <td className="px-2 py-3">
                       <span
-                        className={`rounded-full px-2.5 py-1 text-[12px] font-semibold ${levelClass(
-                          log.level,
-                        )}`}
+                        className={`rounded-full px-2.5 py-1 text-[12px] font-semibold ${levelClass(log.level)}`}
                       >
                         {log.level}
                       </span>
@@ -231,69 +342,88 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
                     <td className="px-2 py-3 text-[#2f3743]">{log.event}</td>
                     <td className="px-2 py-3 text-[#2f3743]">{log.message}</td>
                     <td className="px-2 py-3 text-[#2f3743]">{log.source}</td>
-                    <td className="px-3 py-3 text-right text-[#7d8593]">📄</td>
+                    <td className="px-3 py-3 text-right text-[#7d8593]">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedEvent(log)}
+                        className="rounded border border-[#dfe3e8] px-2 py-1 text-[12px]"
+                      >
+                        View
+                      </button>
+                    </td>
                   </tr>
-                ))}
+                  ))
+                )}
               </tbody>
             </table>
-            <div className="px-3 py-2 border-t border-[#e9ebef] flex items-center justify-between text-[14px] text-[#5f6875]">
-              <div className="flex items-center gap-2">
-                <span>Page</span>
-                <span className="h-8 w-8 rounded-md border border-[#dfe3e8] inline-flex items-center justify-center">
-                  1
-                </span>
-                <span>of 50</span>
-              </div>
-              <div className="flex items-center gap-4">
-                <span>Rows per page: 20</span>
-                <span>Total Logs: 985</span>
-              </div>
+            <div className="px-3 py-2 border-t border-[#e9ebef]">
+              <TablePagination
+                page={currentPage}
+                totalPages={totalPages}
+                totalItems={totalItems}
+                pageSize={limit}
+                label="events"
+                onPageChange={(nextPage) => syncQuery({ page: nextPage })}
+                onPageSizeChange={(nextSize) => syncQuery({ page: 1, limit: nextSize })}
+              />
             </div>
           </article>
 
           <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-            <h2 className="text-[31px] font-bold text-[#1a212c]">Log Detail</h2>
+            <h2 className="text-[31px] font-bold text-[#1a212c]">Event Detail</h2>
             <div className="mt-3 space-y-2 text-[14px]">
               <div>
                 <p className="text-[#6e7785]">Full Timestamp</p>
-                <p className="font-semibold text-[#2f3743]">Oct 26, 2023 - 1:05:45 PM</p>
+                <p className="font-semibold text-[#2f3743]">
+                  {selectedEvent ? new Date(selectedEvent.at).toLocaleString() : "-"}
+                </p>
               </div>
               <div>
                 <p className="text-[#6e7785]">Terminal ID</p>
-                <p className="font-semibold text-[#2f3743]">T2-Kiosk</p>
+                <p className="font-semibold text-[#2f3743]">{id}</p>
               </div>
               <div>
-                <p className="text-[#6e7785]">Log Level:</p>
-                <span className="rounded-full bg-[#f8d2d2] px-2.5 py-1 text-[12px] font-semibold text-[#8f2a2a]">
-                  Error
-                </span>
+                <p className="text-[#6e7785]">Level</p>
+                {selectedEvent ? (
+                  <span className={`rounded-full px-2.5 py-1 text-[12px] font-semibold ${levelClass(selectedEvent.level)}`}>
+                    {selectedEvent.level}
+                  </span>
+                ) : (
+                  <p className="text-[#2f3743]">-</p>
+                )}
               </div>
               <div>
-                <p className="text-[#6e7785]">Detailed Message</p>
+                <p className="text-[#6e7785]">Event</p>
                 <div className="mt-1 rounded-md bg-[#f6f7f9] p-2 text-[12px] text-[#2f3743]">
-                  Transaction declined by payment gateway. Error code: 1024.
-                  Request ID: req_123abc Response:
-                  <br />
-                  {'{ "status": "failed", "error": "insufficient_funds" }'}
+                  {selectedEvent?.event ?? "-"}
                 </div>
               </div>
               <div>
-                <p className="text-[#6e7785]">Stack Trace</p>
-                <p className="text-[#2f3743] text-[12px]">
-                  at com.orderzilla.payment.Gateway.process (Gateway.java:150) ...
-                </p>
+                <p className="text-[#6e7785]">Detailed Message</p>
+                <p className="text-[#2f3743] text-[12px]">{selectedEvent?.message ?? "-"}</p>
               </div>
               <div>
-                <p className="text-[#6e7785]">Device Metadata</p>
-                <p className="text-[#2f3743] text-[12px]">
-                  OS: Android 12
-                  <br />
-                  App: v2.4.1
-                  <br />
-                  Network: Wi-Fi (Strong)
-                </p>
+                <p className="text-[#6e7785]">Source</p>
+                <p className="text-[#2f3743] text-[12px]">{selectedEvent?.source ?? "-"}</p>
               </div>
-              <button className="mt-2 h-10 w-full rounded-lg border border-[#dfe3e8] bg-white text-[14px] font-semibold text-[#3f4653]">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!selectedEvent) return;
+                  navigator.clipboard.writeText(
+                    JSON.stringify(
+                      {
+                        terminal_id: id,
+                        ...selectedEvent,
+                      },
+                      null,
+                      2,
+                    ),
+                  );
+                  toast.success("Event copied to clipboard.");
+                }}
+                className="mt-2 h-10 w-full rounded-lg border border-[#dfe3e8] bg-white text-[14px] font-semibold text-[#3f4653]"
+              >
                 Copy to clipboard
               </button>
             </div>

@@ -1,9 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api";
+import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
+import { validateField } from "@/lib/validation";
 import type { components } from "@/types/orderzilla-openapi";
 
 type CustomerDetailPageProps = { id: string };
@@ -35,50 +39,88 @@ function InfoPair({ label, value }: { label: string; value: string }) {
   );
 }
 
+const TX_PAGE_SIZE = 20;
+
 export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const txPage = Number(searchParams.get("tx_page") ?? "1") || 1;
+
   const [customer, setCustomer] = useState<components["schemas"]["LoyaltyCustomer"] | null>(null);
   const [transactions, setTransactions] = useState<components["schemas"]["LoyaltyTransaction"][]>([]);
+  const [hasMoreTx, setHasMoreTx] = useState(true);
   const [adjustAmount, setAdjustAmount] = useState("");
   const [adjustReason, setAdjustReason] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [isAdjusting, setIsAdjusting] = useState(false);
   const [error, setError] = useState("");
 
-  const fetchCustomer = async () => {
-    try {
-      setIsLoading(true);
-      setError("");
-      const [customerData, tx] = await Promise.all([
-        orderzillaApi.dashboard.loyalty.customers.byId(id),
-        orderzillaApi.dashboard.loyalty.customers.transactions(id, { query: { page: 1, limit: 20 } }),
-      ]);
-      setCustomer(customerData);
-      setTransactions((tx?.transactions ?? []) as components["schemas"]["LoyaltyTransaction"][]);
-    } catch {
-      setError("Failed to load customer details.");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const fetchCustomer = useCallback(
+    async (txPageNum = 1) => {
+      try {
+        setIsLoading(true);
+        setError("");
+        const [customerData, tx] = await Promise.all([
+          orderzillaApi.dashboard.loyalty.customers.byId(id),
+          orderzillaApi.dashboard.loyalty.customers.transactions(id, {
+            query: { page: txPageNum, limit: TX_PAGE_SIZE },
+          }),
+        ]);
+        setCustomer(customerData);
+        const txList = (tx?.transactions ?? []) as components["schemas"]["LoyaltyTransaction"][];
+        setTransactions(txList);
+        setHasMoreTx(txList.length >= TX_PAGE_SIZE);
+      } catch {
+        setError("Failed to load customer details.");
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [id],
+  );
 
   useEffect(() => {
-    fetchCustomer();
-  }, [id]);
+    fetchCustomer(txPage);
+  }, [fetchCustomer, txPage]);
 
   const customerName =
     `${customer?.first_name ?? ""} ${customer?.last_name ?? ""}`.trim() || "Customer";
 
-  const saveAdjustment = async () => {
-    const points = Number(adjustAmount);
-    if (!Number.isFinite(points) || points === 0) return;
-    await orderzillaApi.dashboard.loyalty.customers.adjust(id, {
-      body: {
-        points,
-        description: adjustReason || "Manual adjustment",
+  const adjustAmountError = validateField(adjustAmount, [
+    {
+      type: "custom",
+      validate: (v) => {
+        const n = Number(v);
+        if (!v.trim()) return "Adjustment amount is required.";
+        if (!Number.isFinite(n)) return "Must be a valid number.";
+        if (n === 0) return "Amount must be non-zero (use + or -).";
+        if (!Number.isInteger(n)) return "Must be a whole number.";
+        return null;
       },
-    });
-    setAdjustAmount("");
-    setAdjustReason("");
-    await fetchCustomer();
+    },
+  ]);
+  const isAdjustFormValid = !adjustAmountError;
+
+  const saveAdjustment = async () => {
+    if (!isAdjustFormValid) return;
+    const points = Number(adjustAmount);
+    try {
+      setIsAdjusting(true);
+      await orderzillaApi.dashboard.loyalty.customers.adjust(id, {
+        body: {
+          points,
+          description: adjustReason || "Manual adjustment",
+        },
+      });
+      setAdjustAmount("");
+      setAdjustReason("");
+      toast.success("Points adjusted.");
+      await fetchCustomer(txPage);
+    } catch {
+      toast.error("Failed to adjust points.");
+    } finally {
+      setIsAdjusting(false);
+    }
   };
 
   if (isLoading) {
@@ -95,7 +137,11 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
         {error ? (
           <div className="mb-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
             {error}{" "}
-            <button type="button" onClick={fetchCustomer} className="font-semibold underline">
+            <button
+              type="button"
+              onClick={() => fetchCustomer(txPage)}
+              className="font-semibold underline"
+            >
               Retry
             </button>
           </div>
@@ -109,24 +155,12 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
             <p className="text-[12px] text-[#9aa3ae] mt-1">Customer ID: {id}</p>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[14px] font-semibold text-[#1d2512]"
-            >
-              Adjust Points
-            </button>
             <Link
               href={`/dashboard/customers/${id}/edit-customer`}
-              className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855]"
+              className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[14px] font-semibold text-[#1d2512] inline-flex items-center"
             >
               Edit Customer
             </Link>
-            <button
-              type="button"
-              className="h-10 rounded-lg border border-[#efc3c3] bg-white px-4 text-[14px] font-semibold text-[#cf4a4a]"
-            >
-              Delete Customer
-            </button>
           </div>
         </div>
 
@@ -140,8 +174,10 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
                 <InfoPair label="Phone" value={customer?.phone ?? "-"} />
                 <div>
                   <p className="text-[13px] text-[#6e7785]">Loyalty Tier</p>
-                  <span className="rounded-full bg-[#f6df8c] px-2.5 py-1 text-[12px] font-semibold text-[#7a5a14]">
-                    {customer?.tier ?? "BRONZE"}
+                  <span className="rounded-full bg-[#e5e7eb] px-2.5 py-1 text-[12px] font-semibold text-[#4b5563]">
+                    {customer?.tier
+                      ? customer.tier.charAt(0).toUpperCase() + customer.tier.slice(1).toLowerCase()
+                      : "—"}
                   </span>
                 </div>
               </div>
@@ -152,7 +188,6 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
                     {customer?.points_balance ?? 0} Points
                   </p>
                 </div>
-                <InfoPair label="Total Orders" value="-" />
                 <div>
                   <p className="text-[13px] text-[#6e7785]">Account Status</p>
                   <div className="mt-1 flex items-center gap-2">
@@ -160,10 +195,16 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
                       on={customer?.is_active ?? true}
                       onToggle={async (next) => {
                         if (!customer) return;
-                        setCustomer({ ...customer, is_active: next });
-                        await orderzillaApi.dashboard.loyalty.customers.update(id, {
-                          body: { is_active: next },
-                        });
+                        try {
+                          setCustomer({ ...customer, is_active: next });
+                          await orderzillaApi.dashboard.loyalty.customers.update(id, {
+                            body: { is_active: next },
+                          });
+                          toast.success("Customer status updated.");
+                        } catch {
+                          setCustomer({ ...customer, is_active: !next });
+                          toast.error("Failed to update status.");
+                        }
                       }}
                     />
                     <span className="text-[16px] font-semibold text-[#2f3743]">
@@ -196,20 +237,43 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
                     ${customer?.total_spent ?? "0.00"}
                   </p>
               </div>
-              <div>
-                <p className="text-[13px] text-[#6e7785]">Average Order Value</p>
-                  <p className="text-[31px] leading-tight font-bold text-[#1a2029]">-</p>
-              </div>
             </div>
-            <p className="mt-2 text-[13px] text-[#6e7785]">Points Earned Over Time</p>
-            <div className="mt-2 h-24 rounded-lg bg-gradient-to-t from-[#ebf7bf] to-transparent border border-[#eef2e3]" />
           </article>
         </div>
 
         <div className="mt-3 grid grid-cols-[2fr_1fr] gap-3">
           <article className="rounded-xl border border-[#e4e6ea] overflow-hidden">
-            <div className="px-3 py-2 border-b border-[#e9ebef] bg-white">
+            <div className="px-3 py-2 border-b border-[#e9ebef] bg-white flex items-center justify-between">
               <h2 className="text-[31px] font-bold text-[#1a212c]">Transaction History</h2>
+              <div className="flex items-center gap-2">
+                <span className="text-[12px] text-[#6e7785]">Page {txPage}</span>
+                <button
+                  type="button"
+                  disabled={txPage <= 1}
+                  onClick={() =>
+                    router.replace(
+                      `/dashboard/customers/${id}?tx_page=${txPage - 1}`,
+                      { scroll: false },
+                    )
+                  }
+                  className="h-8 rounded border border-[#dfe3e8] px-2 text-[12px] font-semibold disabled:opacity-50"
+                >
+                  Prev
+                </button>
+                <button
+                  type="button"
+                  disabled={!hasMoreTx}
+                  onClick={() =>
+                    router.replace(
+                      `/dashboard/customers/${id}?tx_page=${txPage + 1}`,
+                      { scroll: false },
+                    )
+                  }
+                  className="h-8 rounded border border-[#dfe3e8] px-2 text-[12px] font-semibold disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
             </div>
             <table className="w-full">
               <thead className="bg-[#f8f9fb] border-b border-[#e9ebef]">
@@ -221,28 +285,33 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
                 </tr>
               </thead>
               <tbody>
-                {transactions.map((tx) => (
-                  <tr key={tx.id} className="border-b border-[#edf0f4] text-[14px]">
-                    <td className="px-3 py-3 text-[#2f3743]">
-                      {tx.created_at ? new Date(tx.created_at).toLocaleString() : "-"}
-                    </td>
-                    <td className="px-2 py-3">
-                      <p className="font-semibold text-[#2f3743]">{tx.description ?? tx.type}</p>
-                    </td>
-                    <td className="px-2 py-3 font-semibold text-[#2f3743]">
-                      {tx.points && tx.points > 0 ? "+" : ""}
-                      {tx.points ?? 0} Points
-                    </td>
-                    <td className="px-3 py-3 text-right font-semibold text-[#2f3743]">
-                      {tx.balance_after ?? 0} Points
+                {transactions.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-10 text-center text-[13px] text-[#717c8e]">
+                      No transactions found.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  transactions.map((tx) => (
+                    <tr key={tx.id} className="border-b border-[#edf0f4] text-[14px]">
+                      <td className="px-3 py-3 text-[#2f3743]">
+                        {tx.created_at ? new Date(tx.created_at).toLocaleString() : "-"}
+                      </td>
+                      <td className="px-2 py-3">
+                        <p className="font-semibold text-[#2f3743]">{tx.description ?? tx.type}</p>
+                      </td>
+                      <td className="px-2 py-3 font-semibold text-[#2f3743]">
+                        {tx.points && tx.points > 0 ? "+" : ""}
+                        {tx.points ?? 0} Points
+                      </td>
+                      <td className="px-3 py-3 text-right font-semibold text-[#2f3743]">
+                        {tx.balance_after ?? 0} Points
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
-            <div className="px-3 py-2 border-t border-[#e9ebef] text-right text-[14px] text-[#5f6875]">
-              Page 1 of 10
-            </div>
           </article>
 
           <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
@@ -250,11 +319,24 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
             <div className="mt-3 space-y-2">
               <div>
                 <label className="text-[13px] text-[#6e7785]">Adjustment Amount</label>
-                <input
-                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px]"
-                  placeholder="e.g. 100 or -50"
+                <ValidatedInput
                   value={adjustAmount}
-                  onChange={(e) => setAdjustAmount(e.target.value)}
+                  onChange={setAdjustAmount}
+                  rules={[
+                    {
+                      type: "custom",
+                      validate: (v) => {
+                        const n = Number(v);
+                        if (!v.trim()) return "Adjustment amount is required.";
+                        if (!Number.isFinite(n)) return "Must be a valid number.";
+                        if (n === 0) return "Amount must be non-zero (use + or -).";
+                        if (!Number.isInteger(n)) return "Must be a whole number.";
+                        return null;
+                      },
+                    },
+                  ]}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none focus:border-[#c0eb1a]"
+                  placeholder="e.g. 100 or -50"
                 />
               </div>
               <div>
@@ -270,9 +352,10 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
               <button
                 type="button"
                 onClick={saveAdjustment}
-                className="h-10 w-full rounded-lg bg-[#d4ff00] text-[14px] font-semibold text-[#1d2512]"
+                disabled={isAdjusting || !isAdjustFormValid}
+                className="h-10 w-full rounded-lg bg-[#d4ff00] text-[14px] font-semibold text-[#1d2512] disabled:opacity-50"
               >
-                Save Adjustment
+                {isAdjusting ? "Saving..." : "Save Adjustment"}
               </button>
             </div>
           </article>

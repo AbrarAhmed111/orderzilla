@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Trash2, UploadCloud } from "lucide-react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
-import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api";
 import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
 import { validateField } from "@/lib/validation";
@@ -15,12 +14,10 @@ import type { components } from "@/types/orderzilla-openapi";
 type ApiCategory = components["schemas"]["Category"];
 type ApiLocation = components["schemas"]["Location"];
 type ApiTerminal = components["schemas"]["Terminal"];
-type ApiPrice = components["schemas"]["Price"];
 type ApiExtraGroup = components["schemas"]["ExtraGroup"];
 
 type PriceDraft = {
-  localId: string;
-  priceId: string;
+  id: string;
   mode: "INDOOR" | "TAKEAWAY" | "BOTH";
   price: string;
   currency: string;
@@ -30,20 +27,8 @@ type PriceDraft = {
   valid_until: string;
 };
 
-const toDateInputValue = (value?: string | null) => {
-  if (!value) return "";
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-  if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) return trimmed.slice(0, 10);
-  const parsed = new Date(trimmed);
-  if (Number.isNaN(parsed.getTime())) return "";
-  return parsed.toISOString().slice(0, 10);
-};
-
 const createPriceDraft = (): PriceDraft => ({
-  localId: crypto.randomUUID(),
-  priceId: "",
+  id: crypto.randomUUID(),
   mode: "BOTH",
   price: "",
   currency: "CHF",
@@ -53,26 +38,9 @@ const createPriceDraft = (): PriceDraft => ({
   valid_until: "",
 });
 
-const mapApiPrice = (price: ApiPrice): PriceDraft => ({
-  localId: crypto.randomUUID(),
-  priceId: price.id ?? "",
-  mode:
-    price.mode === "INDOOR" || price.mode === "TAKEAWAY" || price.mode === "BOTH"
-      ? price.mode
-      : "BOTH",
-  price: price.price ?? "",
-  currency: price.currency ?? "CHF",
-  location_id: price.location_id ?? "",
-  terminal_id: price.terminal_id ?? "",
-  valid_from: toDateInputValue(price.valid_from),
-  valid_until: toDateInputValue(price.valid_until),
-});
-
-export default function EditProductPage() {
+export default function CreateProductPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const productId = searchParams.get("id") ?? "";
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -82,75 +50,37 @@ export default function EditProductPage() {
   const [sortOrder, setSortOrder] = useState<number | "">(0);
   const [prices, setPrices] = useState<PriceDraft[]>([createPriceDraft()]);
   const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imageUrl, setImageUrl] = useState("");
   const [imagePreviewUrl, setImagePreviewUrl] = useState("");
+
   const [categories, setCategories] = useState<ApiCategory[]>([]);
   const [locations, setLocations] = useState<ApiLocation[]>([]);
   const [terminals, setTerminals] = useState<ApiTerminal[]>([]);
   const [extraGroups, setExtraGroups] = useState<ApiExtraGroup[]>([]);
   const [selectedExtraGroupIds, setSelectedExtraGroupIds] = useState<string[]>([]);
-  const [initialExtraGroupIds, setInitialExtraGroupIds] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [error, setError] = useState("");
 
-  const fetchData = async () => {
-    if (!productId) {
-      setError("Product id is missing.");
-      setIsLoading(false);
-      return;
-    }
-    try {
-      setIsLoading(true);
-      setError("");
-      const [product, categoriesRes, locationsRes, terminalsRes, pricesRes, linkedExtrasRes, extrasRes] =
-        await Promise.all([
-          orderzillaApi.dashboard.products.byId(productId),
+  useEffect(() => {
+    const fetchMeta = async () => {
+      try {
+        const [categoriesRes, locationsRes, terminalsRes, extrasRes] = await Promise.all([
           orderzillaApi.dashboard.categories.list(),
           orderzillaApi.dashboard.locations.list(),
           orderzillaApi.dashboard.terminals.list(),
-          orderzillaApi.dashboard.products.prices.list(productId),
-          orderzillaApi.dashboard.products.extras.list(productId),
           orderzillaApi.dashboard.extras.list(),
         ]);
-
-      setName(product?.name ?? "");
-      setDescription(
-        product?.description ??
-          product?.translations?.de?.description ??
-          product?.translations?.en?.description ??
-          "",
-      );
-      setSku(product?.sku ?? "");
-      setCategoryId(product?.category_id ?? "");
-      setTaxRate(product?.tax_rate ?? 8.1);
-      setSortOrder(product?.sort_order ?? 0);
-      setImageUrl(product?.image_url ?? "");
-
-      const priceRows = (pricesRes?.prices ?? []) as ApiPrice[];
-      setPrices(priceRows.length ? priceRows.map(mapApiPrice) : [createPriceDraft()]);
-
-      setCategories((categoriesRes?.categories ?? []) as ApiCategory[]);
-      setLocations((locationsRes?.locations ?? []) as ApiLocation[]);
-      setTerminals((terminalsRes?.terminals ?? []) as ApiTerminal[]);
-      setExtraGroups((extrasRes?.extra_groups ?? []) as ApiExtraGroup[]);
-
-      const linked = ((linkedExtrasRes?.extra_groups ?? []) as ApiExtraGroup[])
-        .map((group) => group.id)
-        .filter((id): id is string => Boolean(id));
-      setSelectedExtraGroupIds(linked);
-      setInitialExtraGroupIds(linked);
-    } catch {
-      setError("Failed to load product.");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, [productId]);
+        setCategories((categoriesRes?.categories ?? []) as ApiCategory[]);
+        setLocations((locationsRes?.locations ?? []) as ApiLocation[]);
+        setTerminals((terminalsRes?.terminals ?? []) as ApiTerminal[]);
+        setExtraGroups((extrasRes?.extra_groups ?? []) as ApiExtraGroup[]);
+      } catch {
+        setCategories([]);
+        setLocations([]);
+        setTerminals([]);
+        setExtraGroups([]);
+      }
+    };
+    fetchMeta();
+  }, []);
 
   useEffect(() => {
     if (!imageFile) {
@@ -162,22 +92,22 @@ export default function EditProductPage() {
     return () => URL.revokeObjectURL(objectUrl);
   }, [imageFile]);
 
-  const updatePrice = <K extends keyof PriceDraft>(localId: string, key: K, value: PriceDraft[K]) => {
-    setPrices((prev) => prev.map((row) => (row.localId === localId ? { ...row, [key]: value } : row)));
+  const resetForm = () => {
+    setName("");
+    setDescription("");
+    setSku("");
+    setCategoryId("");
+    setTaxRate(8.1);
+    setSortOrder(0);
+    setPrices([createPriceDraft()]);
+    setSelectedExtraGroupIds([]);
+    setImageFile(null);
+    setImagePreviewUrl("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const removePrice = async (row: PriceDraft) => {
-    if (prices.length <= 1) return;
-    if (row.priceId && productId) {
-      try {
-        await orderzillaApi.dashboard.products.prices.remove(productId, row.priceId);
-        toast.success("Price removed.");
-      } catch {
-        toast.error("Failed to remove saved price.");
-        return;
-      }
-    }
-    setPrices((prev) => prev.filter((item) => item.localId !== row.localId));
+  const updatePrice = <K extends keyof PriceDraft>(id: string, key: K, value: PriceDraft[K]) => {
+    setPrices((prev) => prev.map((row) => (row.id === id ? { ...row, [key]: value } : row)));
   };
 
   const nameError = validateField(name, [
@@ -188,14 +118,12 @@ export default function EditProductPage() {
   const isFormValid = !nameError && hasValidPrice;
 
   const saveProduct = async () => {
-    if (!productId || !isFormValid) return;
-
+    if (!isFormValid) return;
     const validPrices = prices.filter((price) => price.price.trim().length > 0);
 
     try {
       setIsSaving(true);
-
-      await orderzillaApi.dashboard.products.update(productId, {
+      const created = await orderzillaApi.dashboard.products.create({
         body: {
           name: name.trim(),
           description: description.trim() || undefined,
@@ -209,11 +137,6 @@ export default function EditProductPage() {
                 en: { name: name.trim(), description: description.trim() },
               }
             : undefined,
-        } as never,
-      });
-
-      await orderzillaApi.dashboard.products.prices.upsert(productId, {
-        body: {
           prices: validPrices.map((price) => ({
             mode: price.mode,
             price: price.price.trim(),
@@ -223,101 +146,48 @@ export default function EditProductPage() {
             valid_from: price.valid_from || null,
             valid_until: price.valid_until || null,
           })),
-        },
+        } as never,
       });
 
-      const toAttach = selectedExtraGroupIds.filter((id) => !initialExtraGroupIds.includes(id));
-      const toDetach = initialExtraGroupIds.filter((id) => !selectedExtraGroupIds.includes(id));
-
-      if (toAttach.length > 0) {
+      if (created?.id && selectedExtraGroupIds.length > 0) {
         await Promise.all(
-          toAttach.map((groupId, index) =>
-            orderzillaApi.dashboard.products.extras.attach(productId, {
-              body: { extra_group_id: groupId, sort_order: index },
+          selectedExtraGroupIds.map((groupId, index) =>
+            orderzillaApi.dashboard.products.extras.attach(created.id!, {
+              body: {
+                extra_group_id: groupId,
+                sort_order: index,
+              },
             }),
           ),
         );
       }
 
-      if (toDetach.length > 0) {
-        await Promise.all(
-          toDetach.map((groupId) => orderzillaApi.dashboard.products.extras.detach(productId, groupId)),
-        );
-      }
-
-      if (imageFile) {
+      if (imageFile && created?.id) {
         const formData = new FormData();
         formData.append("image", imageFile);
-        await orderzillaApi.dashboard.products.uploadImage(productId, {
+        await orderzillaApi.dashboard.products.uploadImage(created.id, {
           body: formData as never,
         });
       }
 
-      toast.success("Product updated successfully.");
+      toast.success("Product created successfully.");
       router.push("/dashboard/products");
     } catch {
-      toast.error("Failed to update product.");
+      toast.error("Failed to create product.");
     } finally {
       setIsSaving(false);
     }
   };
 
-  const deleteProduct = async () => {
-    if (!productId) return;
-    if (!window.confirm("Delete this product?")) return;
-    try {
-      setIsDeleting(true);
-      await orderzillaApi.dashboard.products.remove(productId);
-      toast.success("Product deleted.");
-      router.push("/dashboard/products");
-    } catch {
-      toast.error("Failed to delete product.");
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
-  const terminalOptionsByLocation = useMemo(() => {
-    return new Map(
-      prices.map((price) => [
-        price.localId,
-        terminals
-          .filter((terminal) => {
-            if (!terminal.id) return false;
-            if (!price.location_id) return true;
-            return terminal.location_id === price.location_id;
-          })
-          .map((terminal) => ({
-            label: `${terminal.name ?? "Unnamed"} (${terminal.terminal_code ?? "N/A"})`,
-            value: terminal.id ?? "",
-          })),
-      ]),
-    );
-  }, [prices, terminals]);
-
-  if (isLoading) {
-    return (
-      <div className="p-4">
-        <TableSkeleton rows={7} columns={4} />
-      </div>
-    );
-  }
-
   return (
     <div className="p-4">
       <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        {error ? (
-          <div className="mb-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
-            {error}
-          </div>
-        ) : null}
-
         <div className="flex items-center justify-between">
           <div>
             <Link href="/dashboard/products" className="text-[13px] text-[#67707d]">
               ← Back to Products
             </Link>
-            <h1 className="mt-1 text-[42px] leading-none font-extrabold text-[#1a2029]">Edit Product</h1>
+            <h1 className="mt-1 text-[42px] leading-none font-extrabold text-[#1a2029]">Create Product</h1>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -337,12 +207,11 @@ export default function EditProductPage() {
             </button>
             <button
               type="button"
-              onClick={deleteProduct}
-              disabled={isDeleting}
-              className="h-10 rounded-lg border border-[#efc3c3] bg-white px-4 inline-flex items-center gap-2 text-[14px] font-semibold text-[#cf4a4a] disabled:opacity-50"
+              onClick={resetForm}
+              className="h-10 rounded-lg border border-[#efc3c3] bg-white px-4 inline-flex items-center gap-2 text-[14px] font-semibold text-[#cf4a4a]"
             >
               <Trash2 size={14} />
-              {isDeleting ? "Deleting..." : "Delete"}
+              Reset Form
             </button>
           </div>
         </div>
@@ -406,94 +275,6 @@ export default function EditProductPage() {
           </article>
 
           <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-            <h2 className="text-[30px] font-bold text-[#1a212c]">Prices</h2>
-            <div className="mt-3 space-y-2">
-              {prices.map((price, index) => (
-                <div key={price.localId} className="rounded-lg border border-[#e5e7eb] p-2">
-                  <div className="grid grid-cols-4 gap-2">
-                    <SelectMenu
-                      value={price.mode}
-                      onChange={(value) =>
-                        updatePrice(
-                          price.localId,
-                          "mode",
-                          value === "INDOOR" || value === "TAKEAWAY" ? value : "BOTH",
-                        )
-                      }
-                      options={[
-                        { label: "Both", value: "BOTH" },
-                        { label: "Indoor", value: "INDOOR" },
-                        { label: "Takeaway", value: "TAKEAWAY" },
-                      ]}
-                    />
-                    <input
-                      className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
-                      value={price.price}
-                      onChange={(e) => updatePrice(price.localId, "price", e.target.value)}
-                      placeholder="Price (e.g. 9.90)"
-                    />
-                    <input
-                      className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
-                      value={price.currency}
-                      onChange={(e) => updatePrice(price.localId, "currency", e.target.value)}
-                      placeholder="Currency"
-                    />
-                    <SelectMenu
-                      value={price.location_id}
-                      onChange={(value) => updatePrice(price.localId, "location_id", value)}
-                      options={[
-                        { label: "All Locations", value: "" },
-                        ...locations
-                          .filter((location) => Boolean(location.id))
-                          .map((location) => ({
-                            label: location.name ?? "Unnamed location",
-                            value: location.id ?? "",
-                          })),
-                      ]}
-                    />
-                    <SelectMenu
-                      value={price.terminal_id}
-                      onChange={(value) => updatePrice(price.localId, "terminal_id", value)}
-                      options={[
-                        { label: "All Terminals", value: "" },
-                        ...(terminalOptionsByLocation.get(price.localId) ?? []),
-                      ]}
-                    />
-                    <input
-                      type="date"
-                      className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
-                      value={price.valid_from}
-                      onChange={(e) => updatePrice(price.localId, "valid_from", e.target.value)}
-                    />
-                    <input
-                      type="date"
-                      className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
-                      value={price.valid_until}
-                      onChange={(e) => updatePrice(price.localId, "valid_until", e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      disabled={prices.length <= 1}
-                      onClick={() => removePrice(price)}
-                      className="h-9 rounded-lg border border-[#efc3c3] bg-white px-3 text-[12px] font-semibold text-[#cf4a4a] disabled:opacity-50"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                  <p className="mt-1 text-[12px] text-[#7a8291]">Price rule #{index + 1}</p>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setPrices((prev) => [...prev, createPriceDraft()])}
-                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#3f4653]"
-              >
-                + Add Price Rule
-              </button>
-            </div>
-          </article>
-
-          <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
             <h2 className="text-[30px] font-bold text-[#1a212c]">Extra Groups</h2>
             <div className="mt-3 grid grid-cols-2 gap-2">
               {extraGroups
@@ -525,16 +306,104 @@ export default function EditProductPage() {
           </article>
 
           <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-            <h2 className="text-[30px] font-bold text-[#1a212c]">Product Image</h2>
-            <div className="mt-2 h-28 w-28 overflow-hidden rounded-lg border border-[#dfe3e8] bg-[#f6f8fa]">
-              {imagePreviewUrl || imageUrl ? (
-                <img
-                  src={imagePreviewUrl || (imageUrl.startsWith("http") ? imageUrl : `/api/proxy${imageUrl}`)}
-                  alt="Product preview"
-                  className="h-full w-full object-cover"
-                />
-              ) : null}
+            <h2 className="text-[30px] font-bold text-[#1a212c]">Prices</h2>
+            <div className="mt-3 space-y-2">
+              {prices.map((price, index) => (
+                <div key={price.id} className="rounded-lg border border-[#e5e7eb] p-2">
+                  <div className="grid grid-cols-4 gap-2">
+                    <SelectMenu
+                      value={price.mode}
+                      onChange={(value) =>
+                        updatePrice(
+                          price.id,
+                          "mode",
+                          value === "INDOOR" || value === "TAKEAWAY" ? value : "BOTH",
+                        )
+                      }
+                      options={[
+                        { label: "Both", value: "BOTH" },
+                        { label: "Indoor", value: "INDOOR" },
+                        { label: "Takeaway", value: "TAKEAWAY" },
+                      ]}
+                    />
+                    <input
+                      className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                      value={price.price}
+                      onChange={(e) => updatePrice(price.id, "price", e.target.value)}
+                      placeholder="Price (e.g. 9.90)"
+                    />
+                    <input
+                      className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                      value={price.currency}
+                      onChange={(e) => updatePrice(price.id, "currency", e.target.value)}
+                      placeholder="Currency"
+                    />
+                    <SelectMenu
+                      value={price.location_id}
+                      onChange={(value) => updatePrice(price.id, "location_id", value)}
+                      options={[
+                        { label: "All Locations", value: "" },
+                        ...locations
+                          .filter((location) => Boolean(location.id))
+                          .map((location) => ({
+                            label: location.name ?? "Unnamed location",
+                            value: location.id ?? "",
+                          })),
+                      ]}
+                    />
+                    <SelectMenu
+                      value={price.terminal_id}
+                      onChange={(value) => updatePrice(price.id, "terminal_id", value)}
+                      options={[
+                        { label: "All Terminals", value: "" },
+                        ...terminals
+                          .filter((terminal) => {
+                            if (!terminal.id) return false;
+                            if (!price.location_id) return true;
+                            return terminal.location_id === price.location_id;
+                          })
+                          .map((terminal) => ({
+                            label: `${terminal.name ?? "Unnamed"} (${terminal.terminal_code ?? "N/A"})`,
+                            value: terminal.id ?? "",
+                          })),
+                      ]}
+                    />
+                    <input
+                      type="date"
+                      className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                      value={price.valid_from}
+                      onChange={(e) => updatePrice(price.id, "valid_from", e.target.value)}
+                    />
+                    <input
+                      type="date"
+                      className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                      value={price.valid_until}
+                      onChange={(e) => updatePrice(price.id, "valid_until", e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      disabled={prices.length <= 1}
+                      onClick={() => setPrices((prev) => prev.filter((row) => row.id !== price.id))}
+                      className="h-9 rounded-lg border border-[#efc3c3] bg-white px-3 text-[12px] font-semibold text-[#cf4a4a] disabled:opacity-50"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[12px] text-[#7a8291]">Price rule #{index + 1}</p>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setPrices((prev) => [...prev, createPriceDraft()])}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#3f4653]"
+              >
+                + Add Price Rule
+              </button>
             </div>
+          </article>
+
+          <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
+            <h2 className="text-[30px] font-bold text-[#1a212c]">Product Image</h2>
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -550,20 +419,34 @@ export default function EditProductPage() {
               onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
               className="hidden"
             />
-            {(imageFile || imageUrl) && (
-              <p className="mt-2 text-[12px] text-[#6e7785]">Selected: {imageFile?.name ?? imageUrl}</p>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setImageFile(null);
-                setImagePreviewUrl("");
-                if (fileInputRef.current) fileInputRef.current.value = "";
-              }}
-              className="mt-2 h-9 rounded-lg border border-[#efc3c3] bg-white px-4 text-[12px] font-semibold text-[#cf4a4a]"
-            >
-              Remove selected new image
-            </button>
+            {imagePreviewUrl ? (
+              <div className="mt-3 flex items-center gap-2">
+                <div className="h-14 w-14 overflow-hidden rounded-lg border border-[#dfe3e8]">
+                  <img src={imagePreviewUrl} alt="Product preview" className="h-full w-full object-cover" />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855]"
+                >
+                  Replace
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setImageFile(null);
+                    setImagePreviewUrl("");
+                    if (fileInputRef.current) fileInputRef.current.value = "";
+                  }}
+                  className="h-10 rounded-lg border border-[#efc3c3] bg-white px-4 text-[14px] font-semibold text-[#cf4a4a]"
+                >
+                  Remove
+                </button>
+              </div>
+            ) : null}
+            {imageFile ? (
+              <p className="mt-2 text-[12px] text-[#6e7785]">Selected image: {imageFile.name}</p>
+            ) : null}
           </article>
         </div>
       </section>

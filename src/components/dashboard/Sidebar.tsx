@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertCircle,
   ChevronDown,
   Home,
   Layers,
@@ -18,8 +19,9 @@ import {
 import clsx from "clsx";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { clientSignout } from "@/lib/auth/signout";
+import { orderzillaApi } from "@/lib/api/orderzilla-api";
 
 type NavItem = {
   label: string;
@@ -40,7 +42,7 @@ const sections: NavSection[] = [
   },
   {
     title: "OPERATIONS",
-    items: [{ label: "Orders", icon: ShoppingCart, badge: "12", href: "/dashboard/orders" }],
+    items: [{ label: "Orders", icon: ShoppingCart, href: "/dashboard/orders" }],
   },
   {
     title: "MENU",
@@ -54,7 +56,7 @@ const sections: NavSection[] = [
     title: "INFRASTRUCTURE",
     items: [
       { label: "Locations", icon: MapPin, href: "/dashboard/locations" },
-      { label: "Terminals", icon: Monitor, badge: "2", href: "/dashboard/terminals" },
+      { label: "Terminals", icon: Monitor, href: "/dashboard/terminals" },
     ],
   },
   {
@@ -69,12 +71,34 @@ const sections: NavSection[] = [
     items: [
       { label: "Users", icon: UserCircle2, href: "/dashboard/users" },
       { label: "Settings", icon: Settings, href: "/dashboard/settings" },
+      { label: "Endpoints Missing", icon: AlertCircle, href: "/dashboard/endpoints-missing" },
     ],
   },
 ];
 
+type MeResponse = {
+  userId?: string;
+  orgId?: string;
+  email?: string;
+  role?: string;
+  name?: string;
+};
+
+function formatRole(role?: string): string {
+  if (!role) return "User";
+  const r = role.toUpperCase();
+  if (r === "OWNER") return "Owner";
+  if (r === "ADMIN") return "Admin";
+  if (r === "MANAGER") return "Manager";
+  if (r === "VIEWER") return "Viewer";
+  return role.charAt(0).toUpperCase() + role.slice(1).toLowerCase();
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
+  const [userName, setUserName] = useState("");
+  const [userSubtitle, setUserSubtitle] = useState("");
+  const [isLoadingUser, setIsLoadingUser] = useState(true);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(
     () =>
       sections.reduce<Record<string, boolean>>((acc, section) => {
@@ -82,6 +106,34 @@ export default function Sidebar() {
         return acc;
       }, {}),
   );
+
+  useEffect(() => {
+    const loadCurrentUser = async () => {
+      try {
+        setIsLoadingUser(true);
+        const me = (await orderzillaApi.oauth.me()) as MeResponse | null | undefined;
+        const name = me?.name?.trim();
+        const email = me?.email?.trim();
+        const role = me?.role;
+        setUserName(name || email || "User");
+        setUserSubtitle(name && email ? email : (role ? formatRole(role) : "User"));
+      } catch {
+        setUserName("User");
+        setUserSubtitle("User");
+      } finally {
+        setIsLoadingUser(false);
+      }
+    };
+    loadCurrentUser();
+  }, []);
+
+  const initials = (userName || "User")
+    .split(" ")
+    .filter(Boolean)
+    .map((chunk) => chunk[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
 
   const isActive = (href?: string) => {
     if (!href) return false;
@@ -178,14 +230,16 @@ export default function Sidebar() {
       </nav>
 
       <div className="mt-3 shrink-0 rounded-2xl border border-[#e7ebf1] bg-white p-2.5 flex items-center gap-2 shadow-[0_1px_2px_rgba(18,22,31,0.06)]">
-        <div className="h-10 w-10 rounded-full bg-[#ffd89a] flex items-center justify-center text-[#7b5423] font-semibold ring-2 ring-[#fff5d9]">
-          AM
+        <div className="h-10 w-10 rounded-full bg-[#ffd89a] flex items-center justify-center text-[#7b5423] font-semibold ring-2 ring-[#fff5d9] shrink-0">
+          {initials || "U"}
         </div>
-        <div className="flex-1">
-          <p className="text-[13px] font-semibold text-[#1d222a] leading-tight">
-            Anna Meier
+        <div className="flex-1 min-w-0">
+          <p className="text-[13px] font-semibold text-[#1d222a] leading-tight truncate">
+            {isLoadingUser ? "Loading…" : userName || "User"}
           </p>
-          <p className="text-[11px] text-[#8a8f99] leading-tight">Manager</p>
+          <p className="text-[11px] text-[#8a8f99] leading-tight truncate">
+            {isLoadingUser ? "" : userSubtitle || "User"}
+          </p>
         </div>
         <button
           type="button"

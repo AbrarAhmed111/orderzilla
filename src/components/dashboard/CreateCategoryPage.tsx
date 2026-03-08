@@ -6,6 +6,8 @@ import { Trash2, UploadCloud } from "lucide-react";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import { orderzillaApi } from "@/lib/api";
+import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
+import { validateField } from "@/lib/validation";
 
 export default function CreateCategoryPage() {
   const router = useRouter();
@@ -36,12 +38,15 @@ export default function CreateCategoryPage() {
     return () => URL.revokeObjectURL(objectUrl);
   }, [imageFile]);
 
+  const nameError = validateField(name, [
+    { type: "required", message: "Category name is required." },
+    { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+  ]);
+  const isFormValid = !nameError;
+
   const handleSave = async () => {
+    if (!isFormValid) return;
     const trimmedName = name.trim();
-    if (!trimmedName) {
-      toast.error("Category name is required.");
-      return;
-    }
     try {
       setIsSaving(true);
       const created = await orderzillaApi.dashboard.categories.create({
@@ -97,8 +102,8 @@ export default function CreateCategoryPage() {
             <button
               type="button"
               onClick={handleSave}
-              disabled={isSaving}
-              className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[14px] font-semibold text-[#1d2512]"
+              disabled={isSaving || !isFormValid}
+              className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[14px] font-semibold text-[#1d2512] disabled:opacity-50"
             >
               {isSaving ? "Saving..." : "Save Category"}
             </button>
@@ -120,10 +125,14 @@ export default function CreateCategoryPage() {
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[14px] font-semibold text-[#363f4c]">Category Name</label>
-                  <input
-                    className="mt-1 h-10 w-full rounded-lg border border-[#8ac791] px-3 text-[14px] outline-none"
+                  <ValidatedInput
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={setName}
+                    rules={[
+                      { type: "required", message: "Category name is required." },
+                      { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
+                    ]}
+                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none focus:border-[#c0eb1a]"
                     placeholder="e.g., Burgers"
                   />
                   <p className="mt-1 text-[12px] text-[#7d8694]">Enter e-input&apos;s category name.</p>
