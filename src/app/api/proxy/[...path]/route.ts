@@ -51,7 +51,7 @@ async function handleProxy(request: NextRequest, context: ProxyContext) {
 
   const method = request.method.toUpperCase();
   const hasBody = !["GET", "HEAD"].includes(method);
-  const body = hasBody ? await request.text() : undefined;
+  const body = hasBody ? Buffer.from(await request.arrayBuffer()) : undefined;
   const outboundHeaders = Object.fromEntries(headers.entries());
 
   try {

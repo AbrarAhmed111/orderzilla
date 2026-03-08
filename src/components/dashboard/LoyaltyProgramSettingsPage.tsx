@@ -1,116 +1,58 @@
 "use client";
 
-import { type ReactNode, useEffect, useMemo, useState } from "react";
-import RowActionMenu from "@/components/dashboard/ui/RowActionMenu";
+import { useCallback, useEffect, useState } from "react";
+import { isAxiosError } from "axios";
+import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
-import { orderzillaApi } from "@/lib/api";
+import { orderzillaApi } from "@/lib/api/orderzilla-api";
 import type { components } from "@/types/orderzilla-openapi";
+type LoyaltyProgram = components["schemas"]["LoyaltyProgram"];
+type LoyaltyCustomer = components["schemas"]["LoyaltyCustomer"];
 
-type ToggleProps = {
-  on: boolean;
-  onToggle?: (next: boolean) => void;
-};
-
-type Tier = {
-  id: string;
+type ProgramForm = {
   name: string;
-  points: number;
-  discount: number;
-  badgeColor: string;
+  is_active: boolean;
+  points_per_chf: number;
+  chf_per_point: number;
+  min_redeem_points: number;
+  max_redeem_percent: number;
+  expiry_days: number;
 };
 
-type NotificationKey = "pointsAdded" | "pointsRedeemed" | "tierUpgraded";
-
-type NotificationConfig = {
-  enabled: boolean;
-  message: string;
+const DEFAULT_FORM: ProgramForm = {
+  name: "Orderzilla Punkte",
+  is_active: true,
+  points_per_chf: 1,
+  chf_per_point: 0.01,
+  min_redeem_points: 100,
+  max_redeem_percent: 50,
+  expiry_days: 365,
 };
 
-function Toggle({ on, onToggle }: ToggleProps) {
-  const interactive = typeof onToggle === "function";
-  return (
-    <button
-      type="button"
-      onClick={() => onToggle?.(!on)}
-      disabled={!interactive}
-      className={`relative inline-flex h-7 w-12 items-center rounded-full border transition ${
-        on ? "bg-[#d7ff3f] border-[#c9f339]" : "bg-[#eceef2] border-[#dde2ea]"
-      } ${interactive ? "cursor-pointer" : "cursor-default"}`}
-    >
-      <span
-        className={`h-5 w-5 rounded-full bg-white shadow-sm transition ${
-          on ? "translate-x-6" : "translate-x-1"
-        }`}
-      />
-    </button>
-  );
+function mapProgramToForm(program?: LoyaltyProgram): ProgramForm {
+  return {
+    name: program?.name ?? DEFAULT_FORM.name,
+    is_active: program?.is_active ?? DEFAULT_FORM.is_active,
+    points_per_chf: program?.points_per_chf ?? DEFAULT_FORM.points_per_chf,
+    chf_per_point: program?.chf_per_point ?? DEFAULT_FORM.chf_per_point,
+    min_redeem_points: program?.min_redeem_points ?? DEFAULT_FORM.min_redeem_points,
+    max_redeem_percent: program?.max_redeem_percent ?? DEFAULT_FORM.max_redeem_percent,
+    expiry_days: program?.expiry_days ?? DEFAULT_FORM.expiry_days,
+  };
 }
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-[#e4e6ea] bg-white p-2">
-      <p className="text-[13px] text-[#6e7785]">{label}</p>
-      <div className="mt-1 flex items-end justify-between">
-        <p className="text-[42px] leading-none font-extrabold text-[#1a2029]">{value}</p>
-        <div className="h-8 w-20 rounded bg-gradient-to-t from-[#ebf7bf] to-transparent border border-[#eef2e3]" />
-      </div>
+    <div className="rounded-lg border border-[#e5e7eb] bg-white p-3">
+      <p className="text-[12px] text-[#717c8e]">{label}</p>
+      <p className="mt-1 text-[24px] font-extrabold leading-none text-[#12161f]">{value}</p>
     </div>
   );
 }
 
-function Card({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <article className="rounded-xl border border-[#e4e6ea] bg-white p-3 md:p-4">
-      <h2 className="text-[31px] font-bold text-[#1a212c]">{title}</h2>
-      <div className="mt-2 space-y-2.5">{children}</div>
-    </article>
-  );
-}
-
 export default function LoyaltyProgramSettingsPage() {
-  const defaultRuleSettings = useMemo(
-    () => ({
-      enabled: true,
-      pointsEarnRate: "1 CHF = 1 Point",
-      redemptionValue: "10 Points = 1 CHF",
-      minimumRedemptionPoints: "100 Points",
-      maxDiscountPerOrder: "25%",
-      pointsExpiryDays: "365 Days",
-    }),
-    [],
-  );
-
-  const defaultNotifications = useMemo(
-    () =>
-      ({
-        pointsAdded: {
-          enabled: true,
-          message: "e.g., You've earned {points} points!",
-        },
-        pointsRedeemed: {
-          enabled: true,
-          message: "e.g., You've redeemed {points} points for a {value} discount.",
-        },
-        tierUpgraded: {
-          enabled: true,
-          message: "e.g., Congratulations! You've reached the {tier_name} tier.",
-        },
-      }) satisfies Record<NotificationKey, NotificationConfig>,
-    [],
-  );
-
-  const defaultTiers = useMemo<Tier[]>(
-    () => [
-      { id: "gold", name: "Gold", points: 5000, discount: 10, badgeColor: "#d2a92f" },
-      { id: "silver", name: "Silver", points: 2000, discount: 5, badgeColor: "#b4bac4" },
-      { id: "bronze", name: "Bronze", points: 0, discount: 0, badgeColor: "#b07445" },
-    ],
-    [],
-  );
-
-  const [rules, setRules] = useState(defaultRuleSettings);
-  const [notifications, setNotifications] = useState(defaultNotifications);
-  const [tiers, setTiers] = useState(defaultTiers);
+  const [form, setForm] = useState<ProgramForm>(DEFAULT_FORM);
+  const [initialForm, setInitialForm] = useState<ProgramForm>(DEFAULT_FORM);
   const [summary, setSummary] = useState({
     totalMembers: 0,
     totalPointsIssued: 0,
@@ -119,68 +61,31 @@ export default function LoyaltyProgramSettingsPage() {
   });
   const [isDirty, setIsDirty] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const updateRule = <K extends keyof typeof rules>(key: K, value: (typeof rules)[K]) => {
-    setRules((prev) => ({ ...prev, [key]: value }));
-    setIsDirty(true);
-  };
-
-  const updateNotification = <K extends NotificationKey>(
-    key: K,
-    payload: Partial<NotificationConfig>,
-  ) => {
-    setNotifications((prev) => ({
-      ...prev,
-      [key]: { ...prev[key], ...payload },
-    }));
-    setIsDirty(true);
-  };
-
-  const updateTier = (id: string, payload: Partial<Tier>) => {
-    setTiers((prev) => prev.map((tier) => (tier.id === id ? { ...tier, ...payload } : tier)));
-    setIsDirty(true);
-  };
-
-  const addTier = () => {
-    setTiers((prev) => [
-      ...prev,
-      {
-        id: `tier-${Date.now()}`,
-        name: `Tier ${prev.length + 1}`,
-        points: 1000,
-        discount: 3,
-        badgeColor: "#8c96a6",
-      },
-    ]);
-    setIsDirty(true);
-  };
-
-  const removeTier = (id: string) => {
-    setTiers((prev) => (prev.length > 1 ? prev.filter((tier) => tier.id !== id) : prev));
-    setIsDirty(true);
-  };
-
-  const fetchLoyaltyProgram = async () => {
+  const fetchLoyaltyProgram = useCallback(async () => {
     try {
       setIsLoading(true);
       setError("");
-      const [program, customersData] = await Promise.all([
-        orderzillaApi.dashboard.loyalty.program.get(),
-        orderzillaApi.dashboard.loyalty.customers.list({ query: { page: 1, limit: 200 } }),
-      ]);
 
-      setRules((prev) => ({
-        ...prev,
-        enabled: program?.is_active ?? prev.enabled,
-        pointsEarnRate: `${program?.points_per_chf ?? 1} CHF = 1 Point`,
-        redemptionValue: `${Math.round(1 / (program?.chf_per_point ?? 0.1)) || 10} Points = 1 CHF`,
-        minimumRedemptionPoints: `${program?.min_redeem_points ?? 100} Points`,
-        maxDiscountPerOrder: `${program?.max_redeem_percent ?? 25}%`,
-        pointsExpiryDays: `${program?.expiry_days ?? 365} Days`,
-      }));
+      let program: LoyaltyProgram | undefined;
+      try {
+        program = await orderzillaApi.dashboard.loyalty.program.get();
+      } catch (programError) {
+        if (!(isAxiosError(programError) && programError.response?.status === 404)) {
+          throw programError;
+        }
+      }
 
-      const customers = (customersData?.customers ?? []) as components["schemas"]["LoyaltyCustomer"][];
+      const customersData = await orderzillaApi.dashboard.loyalty.customers.list({
+        query: { page: 1, limit: 200 },
+      });
+      const nextForm = mapProgramToForm(program);
+      setForm(nextForm);
+      setInitialForm(nextForm);
+
+      const customers = (customersData?.customers ?? []) as LoyaltyCustomer[];
       const totalMembers = customers.length;
       const totalPointsIssued = customers.reduce(
         (sum, customer) => sum + (customer.total_points_earned ?? 0),
@@ -192,68 +97,75 @@ export default function LoyaltyProgramSettingsPage() {
       );
       const activeMembers = customers.filter((customer) => customer.is_active).length;
       setSummary({ totalMembers, totalPointsIssued, totalPointsRedeemed, activeMembers });
+      setIsDirty(false);
     } catch {
       setError("Failed to load loyalty program data.");
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchLoyaltyProgram();
-  }, []);
+  }, [fetchLoyaltyProgram]);
 
   const onSave = async () => {
-    const parseLeadingNumber = (value: string, fallback: number) => {
-      const number = Number(value.replace(/[^\d.]/g, ""));
-      return Number.isFinite(number) && number > 0 ? number : fallback;
-    };
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const payload = {
+        name: form.name.trim() || DEFAULT_FORM.name,
+        points_per_chf: Math.max(0, form.points_per_chf),
+        chf_per_point: Math.max(0.000001, form.chf_per_point),
+        min_redeem_points: Math.max(0, Math.floor(form.min_redeem_points)),
+        max_redeem_percent: Math.min(100, Math.max(0, form.max_redeem_percent)),
+        expiry_days: Math.max(1, Math.floor(form.expiry_days)),
+        is_active: form.is_active,
+      };
 
-    await orderzillaApi.dashboard.loyalty.program.update({
-      body: {
-        points_per_chf: parseLeadingNumber(rules.pointsEarnRate, 1),
-        chf_per_point: 0.1,
-        min_redeem_points: parseLeadingNumber(rules.minimumRedemptionPoints, 100),
-        max_redeem_percent: parseLeadingNumber(rules.maxDiscountPerOrder, 25),
-        expiry_days: parseLeadingNumber(rules.pointsExpiryDays, 365),
-        is_active: rules.enabled,
-      },
-    });
-    setIsDirty(false);
+      const response = await orderzillaApi.dashboard.loyalty.program.update({ body: payload });
+      const mapped = mapProgramToForm(response);
+      setForm(mapped);
+      setInitialForm(mapped);
+      setIsDirty(false);
+      toast.success("Loyalty program settings saved.");
+    } catch {
+      toast.error("Failed to save loyalty program settings.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const onReset = () => {
-    setRules(defaultRuleSettings);
-    setNotifications(defaultNotifications);
-    setTiers(defaultTiers);
+    setForm(initialForm);
     setIsDirty(false);
   };
 
   return (
-    <div className="p-3 md:p-4 lg:p-5">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 md:px-5 md:py-5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+    <div className="p-4">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white p-5 shadow-[0_2px_8px_rgba(15,23,42,0.05)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-[44px] leading-none font-extrabold text-[#1a2029]">
-            Loyalty Program Settings
-          </h1>
+          <div>
+            <h1 className="text-[30px] font-extrabold text-[#12161f]">Loyalty Program Settings</h1>
+            <p className="text-[13px] text-[#717c8e]">
+              Configure points and redemption rules backed by your live API.
+            </p>
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
+              disabled={isSaving || !isDirty}
               onClick={onSave}
-              className={`h-9 rounded-lg px-4 text-[12px] font-semibold ${
-                isDirty
-                  ? "bg-[#d4ff00] text-[#1d2512]"
-                  : "bg-[#eef2d2] text-[#69753c]"
-              }`}
+              className="h-9 rounded-lg bg-[#d0fe1d] px-4 text-[12px] font-semibold text-[#12161f] disabled:opacity-50"
             >
-              Save Settings
+              {isSaving ? "Saving..." : "Save Settings"}
             </button>
             <button
               type="button"
               onClick={onReset}
-              className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855]"
+              className="h-9 rounded-lg border border-[#d1d6db] bg-white px-4 text-[12px] font-semibold text-[#12161f]"
             >
-              Reset Defaults
+              Reset Changes
             </button>
           </div>
         </div>
@@ -271,224 +183,146 @@ export default function LoyaltyProgramSettingsPage() {
             <TableSkeleton rows={8} columns={4} />
           </div>
         ) : (
-          <div className="mt-4 grid grid-cols-1 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3">
-          <Card title="Program Rules">
-            <div className="mt-2 flex items-center gap-2">
-              <Toggle on={rules.enabled} onToggle={(next) => updateRule("enabled", next)} />
-              <span className="text-[13px] font-semibold text-[#2f3743]">Enable Loyalty Program</span>
-            </div>
-
-            <div className="mt-3 space-y-2">
-              <div>
-                <label className="text-[13px] font-semibold text-[#4e5664]">
-                  Points earning rate (CHF spent -&gt; Points earned)
-                </label>
-                <input
-                  className="mt-1 h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                  value={rules.pointsEarnRate}
-                  onChange={(e) => updateRule("pointsEarnRate", e.target.value)}
-                />
-                <p className="mt-1 text-[12px] text-[#7a8291]">
-                  How many points a customer earns for every 1 CHF spent.
-                </p>
-              </div>
-              <div>
-                <label className="text-[13px] font-semibold text-[#4e5664]">
-                  Redemption value (Points redeemed -&gt; CHF value)
-                </label>
-                <input
-                  className="mt-1 h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                  value={rules.redemptionValue}
-                  onChange={(e) => updateRule("redemptionValue", e.target.value)}
-                />
-                <p className="mt-1 text-[12px] text-[#7a8291]">
-                  The value of points when redeemed for discounts.
-                </p>
-              </div>
-              <div>
-                <label className="text-[13px] font-semibold text-[#4e5664]">
-                  Minimum points for redemption
-                </label>
-                <input
-                  className="mt-1 h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                  value={rules.minimumRedemptionPoints}
-                  onChange={(e) => updateRule("minimumRedemptionPoints", e.target.value)}
-                />
-                <p className="mt-1 text-[12px] text-[#7a8291]">
-                  The minimum points required to start redeeming.
-                </p>
-              </div>
-              <div>
-                <label className="text-[13px] font-semibold text-[#4e5664]">
-                  Maximum discount % per order
-                </label>
-                <input
-                  className="mt-1 h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                  value={rules.maxDiscountPerOrder}
-                  onChange={(e) => updateRule("maxDiscountPerOrder", e.target.value)}
-                />
-                <p className="mt-1 text-[12px] text-[#7a8291]">
-                  Limit the maximum discount applied using points.
-                </p>
-              </div>
-              <div>
-                <label className="text-[13px] font-semibold text-[#4e5664]">
-                  Points expiry (days after earning)
-                </label>
-                <input
-                  className="mt-1 h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                  value={rules.pointsExpiryDays}
-                  onChange={(e) => updateRule("pointsExpiryDays", e.target.value)}
-                />
-                <p className="mt-1 text-[12px] text-[#7a8291]">
-                  Points expire after this many days of inactivity.
-                </p>
-              </div>
-            </div>
-          </Card>
-
-          <div className="space-y-3">
-            <Card title="Tier Configuration">
-              <div className="mt-2 rounded-lg border border-[#e4e6ea] overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px]">
-                  <thead className="bg-[#f8f9fb] border-b border-[#e9ebef]">
-                    <tr className="text-[12px] text-[#6e7785] text-left">
-                      <th className="px-2 py-2 w-6">⇅</th>
-                      <th className="px-2 py-2 font-semibold">Tier Name</th>
-                      <th className="px-2 py-2 font-semibold">Required Points Threshold</th>
-                      <th className="px-2 py-2 font-semibold">Discount %</th>
-                      <th className="px-2 py-2 font-semibold">Badge Color</th>
-                      <th className="px-2 py-2 font-semibold text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tiers.map((row) => (
-                      <tr key={row.id} className="border-b last:border-b-0 border-[#edf0f4] text-[12px]">
-                        <td className="px-2 py-2 text-[#9aa3ae]">⋮⋮</td>
-                        <td className="px-2 py-2 font-semibold text-[#2f3743]">
-                          <input
-                            value={row.name}
-                            onChange={(e) => updateTier(row.id, { name: e.target.value })}
-                            className="h-8 w-full rounded-md border border-[#e1e5ea] px-2 text-[12px]"
-                          />
-                        </td>
-                        <td className="px-2 py-2 text-[#2f3743]">
-                          <input
-                            value={row.points}
-                            onChange={(e) => updateTier(row.id, { points: Number(e.target.value || 0) })}
-                            className="h-8 w-full rounded-md border border-[#e1e5ea] px-2 text-[12px]"
-                            type="number"
-                            min={0}
-                          />
-                        </td>
-                        <td className="px-2 py-2 text-[#2f3743]">
-                          <input
-                            value={row.discount}
-                            onChange={(e) =>
-                              updateTier(row.id, { discount: Number(e.target.value || 0) })
-                            }
-                            className="h-8 w-full rounded-md border border-[#e1e5ea] px-2 text-[12px]"
-                            type="number"
-                            min={0}
-                          />
-                        </td>
-                        <td className="px-2 py-2">
-                          <input
-                            value={row.badgeColor}
-                            onChange={(e) => updateTier(row.id, { badgeColor: e.target.value })}
-                            className="h-8 w-20 rounded-md border border-[#e1e5ea] px-2 text-[12px]"
-                          />
-                        </td>
-                        <td className="px-2 py-2 text-right">
-                          <RowActionMenu
-                            actions={[
-                              {
-                                label: "Increase discount",
-                                onClick: () => updateTier(row.id, { discount: row.discount + 1 }),
-                              },
-                              {
-                                label: "Decrease threshold",
-                                onClick: () => updateTier(row.id, { points: Math.max(0, row.points - 500) }),
-                              },
-                              {
-                                label: "Remove tier",
-                                onClick: () => removeTier(row.id),
-                                danger: true,
-                              },
-                            ]}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  </table>
+          <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+            <article className="rounded-xl border border-[#e5e7eb] bg-white p-4">
+              <h2 className="text-[18px] font-bold text-[#12161f]">Program Rules</h2>
+              <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <label className="text-[12px] font-semibold text-[#4b5563]">Program Name</label>
+                  <input
+                    className="mt-1 h-10 w-full rounded-lg border border-[#d1d6db] px-3 text-[13px]"
+                    value={form.name}
+                    onChange={(event) => {
+                      setForm((prev) => ({ ...prev, name: event.target.value }));
+                      setIsDirty(true);
+                    }}
+                    placeholder="Orderzilla Punkte"
+                  />
                 </div>
+                <label className="flex items-center gap-2 text-[13px] font-semibold text-[#12161f]">
+                  <input
+                    type="checkbox"
+                    checked={form.is_active}
+                    onChange={(event) => {
+                      setForm((prev) => ({ ...prev, is_active: event.target.checked }));
+                      setIsDirty(true);
+                    }}
+                  />
+                  Enable Loyalty Program
+                </label>
+              <div>
+                <label className="text-[12px] font-semibold text-[#4b5563]">Points Per CHF</label>
+                <input
+                  className="mt-1 h-10 w-full rounded-lg border border-[#d1d6db] px-3 text-[13px]"
+                  value={form.points_per_chf}
+                  onChange={(event) => {
+                    setForm((prev) => ({ ...prev, points_per_chf: Number(event.target.value || 0) }));
+                    setIsDirty(true);
+                  }}
+                  type="number"
+                  min={0}
+                  step="0.01"
+                />
               </div>
-              <button
-                type="button"
-                onClick={addTier}
-                className="mt-2 h-9 w-full rounded-lg border border-[#dfe3e8] bg-white text-[12px] font-semibold text-[#3f4653]"
-              >
-                + Add Tier
-              </button>
-            </Card>
+              <div>
+                <label className="text-[12px] font-semibold text-[#4b5563]">CHF Per Point</label>
+                <input
+                  className="mt-1 h-10 w-full rounded-lg border border-[#d1d6db] px-3 text-[13px]"
+                  value={form.chf_per_point}
+                  onChange={(event) => {
+                    setForm((prev) => ({ ...prev, chf_per_point: Number(event.target.value || 0) }));
+                    setIsDirty(true);
+                  }}
+                  type="number"
+                  min={0.000001}
+                  step="0.0001"
+                />
+              </div>
+              <div>
+                <label className="text-[12px] font-semibold text-[#4b5563]">Minimum Redeem Points</label>
+                <input
+                  className="mt-1 h-10 w-full rounded-lg border border-[#d1d6db] px-3 text-[13px]"
+                  value={form.min_redeem_points}
+                  onChange={(event) => {
+                    setForm((prev) => ({ ...prev, min_redeem_points: Number(event.target.value || 0) }));
+                    setIsDirty(true);
+                  }}
+                  type="number"
+                  min={0}
+                />
+              </div>
+              <div>
+                <label className="text-[12px] font-semibold text-[#4b5563]">Max Redeem Percent</label>
+                <input
+                  className="mt-1 h-10 w-full rounded-lg border border-[#d1d6db] px-3 text-[13px]"
+                  value={form.max_redeem_percent}
+                  onChange={(event) => {
+                    setForm((prev) => ({ ...prev, max_redeem_percent: Number(event.target.value || 0) }));
+                    setIsDirty(true);
+                  }}
+                  type="number"
+                  min={0}
+                  max={100}
+                />
+              </div>
+              <div>
+                <label className="text-[12px] font-semibold text-[#4b5563]">Expiry Days</label>
+                <input
+                  className="mt-1 h-10 w-full rounded-lg border border-[#d1d6db] px-3 text-[13px]"
+                  value={form.expiry_days}
+                  onChange={(event) => {
+                    setForm((prev) => ({ ...prev, expiry_days: Number(event.target.value || 0) }));
+                    setIsDirty(true);
+                  }}
+                  type="number"
+                  min={1}
+                />
+              </div>
+              </div>
+            </article>
 
-            <Card title="Notifications">
-              <div className="mt-2 space-y-2">
-                {[
-                  {
-                    key: "pointsAdded",
-                    label: "Notify customer when points are added",
-                  },
-                  {
-                    key: "pointsRedeemed",
-                    label: "Notify customer when points are redeemed",
-                  },
-                  {
-                    key: "tierUpgraded",
-                    label: "Notify customer when tier is upgraded",
-                  },
-                ].map((item) => {
-                  const notification = notifications[item.key as NotificationKey];
-                  return (
-                  <div key={item.label}>
-                    <label className="flex items-center gap-2 text-[14px] font-semibold text-[#2f3743]">
-                      <input
-                        type="checkbox"
-                        checked={notification.enabled}
-                        onChange={(e) =>
-                          updateNotification(item.key as NotificationKey, {
-                            enabled: e.target.checked,
-                          })
-                        }
-                      />
-                      <span>{item.label}</span>
-                    </label>
-                    <textarea
-                      className="mt-1 w-full rounded-lg border border-[#dfe3e8] px-3 py-2 text-[12px]"
-                      rows={2}
-                      value={notification.message}
-                      onChange={(e) =>
-                        updateNotification(item.key as NotificationKey, { message: e.target.value })
-                      }
-                    />
-                  </div>
-                  );
-                })}
-              </div>
-            </Card>
+            <div className="space-y-3">
+              <article className="rounded-xl border border-[#e5e7eb] bg-white p-4">
+                <h2 className="text-[18px] font-bold text-[#12161f]">Live Program Summary</h2>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <StatCard label="Total Members" value={summary.totalMembers.toLocaleString()} />
+                  <StatCard label="Points Issued" value={summary.totalPointsIssued.toLocaleString()} />
+                  <StatCard label="Points Redeemed" value={summary.totalPointsRedeemed.toLocaleString()} />
+                  <StatCard label="Active Members" value={summary.activeMembers.toLocaleString()} />
+                </div>
+              </article>
 
-            <Card title="Program Summary">
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <StatCard label="Total Members" value={summary.totalMembers.toLocaleString()} />
-                <StatCard label="Total Points Issued" value={summary.totalPointsIssued.toLocaleString()} />
-                <StatCard label="Total Points Redeemed" value={summary.totalPointsRedeemed.toLocaleString()} />
-                <StatCard label="Active Members (Last 30 Days)" value={summary.activeMembers.toLocaleString()} />
-              </div>
-            </Card>
+              <article className="rounded-xl border border-[#e5e7eb] bg-white p-4">
+                <h2 className="text-[18px] font-bold text-[#12161f]">Current Conversion</h2>
+                <div className="mt-3 space-y-2 text-[13px] text-[#374151]">
+                  <p>
+                    <span className="font-semibold">{form.points_per_chf}</span> point(s) earned per 1 CHF spent
+                  </p>
+                  <p>
+                    1 point equals{" "}
+                    <span className="font-semibold">
+                      CHF {Number.isFinite(form.chf_per_point) ? form.chf_per_point.toFixed(4) : "0.0000"}
+                    </span>
+                  </p>
+                  <p>
+                    Minimum redeem threshold: <span className="font-semibold">{form.min_redeem_points}</span> points
+                  </p>
+                  <p>
+                    Max order discount via points: <span className="font-semibold">{form.max_redeem_percent}%</span>
+                  </p>
+                  <p>
+                    Points expiry policy: <span className="font-semibold">{form.expiry_days}</span> day(s)
+                  </p>
+                  <p>
+                    Program status:{" "}
+                    <span className={`font-semibold ${form.is_active ? "text-[#15803d]" : "text-[#b91c1c]"}`}>
+                      {form.is_active ? "Active" : "Inactive"}
+                    </span>
+                  </p>
+                </div>
+              </article>
+            </div>
           </div>
-        </div>
         )}
       </section>
     </div>

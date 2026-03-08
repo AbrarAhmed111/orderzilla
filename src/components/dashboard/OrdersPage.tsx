@@ -154,7 +154,7 @@ export default function OrdersPage() {
       initialTimeline === "thisMonth" ||
       initialTimeline === "all"
       ? initialTimeline
-      : "today",
+      : "last7",
   );
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [page, setPage] = useState(Number.isFinite(initialPage) && initialPage > 0 ? initialPage : 1);
@@ -268,7 +268,7 @@ export default function OrdersPage() {
     if (paymentFilter !== "all") next.set("payment", paymentFilter);
     if (typeFilter !== "all") next.set("type", typeFilter);
     if (statusFilter !== "all") next.set("status", statusFilter);
-    if (timelineFilter !== "today") next.set("timeline", timelineFilter);
+    if (timelineFilter !== "last7") next.set("timeline", timelineFilter);
     if (page !== 1) next.set("page", String(page));
     if (pageSize !== 20) next.set("limit", String(pageSize));
     const nextQuery = next.toString();
@@ -552,7 +552,7 @@ export default function OrdersPage() {
     setPaymentFilter("all");
     setTypeFilter("all");
     setStatusFilter("all");
-    setTimelineFilter("today");
+    setTimelineFilter("last7");
     setActiveTab("All Orders");
     setPage(1);
   };

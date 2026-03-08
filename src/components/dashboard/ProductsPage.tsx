@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { ChevronDown, MapPin, Search, Tag } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import toast from "react-hot-toast";
 import RowActionMenu from "@/components/dashboard/ui/RowActionMenu";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
@@ -17,10 +19,12 @@ type ProductRow = {
   id: string;
   name: string;
   sku: string;
+  categoryId: string;
   category: string;
+  rawTaxRate: number | undefined;
   basePrice: string;
   vat: string;
-  stock: "In Stock" | "Low Stock" | "Out of Stock";
+  stock: "In Stock" | "Out of Stock";
   visible: boolean;
   locationOverride: "" | "pin" | "tag";
 };
@@ -51,48 +55,102 @@ function Toggle({
 
 function stockClass(stock: string) {
   if (stock === "In Stock") return "bg-[#d5f5dc] text-[#2a6b39]";
-  if (stock === "Low Stock") return "bg-[#fde8be] text-[#855100]";
   return "bg-[#f8d2d2] text-[#8f2a2a]";
 }
 
+type TableResponse = {
+  products?: ApiProduct[];
+  pagination?: {
+    current_page?: number;
+    total_pages?: number;
+    total_items?: number;
+    items_per_page?: number;
+  };
+};
+
 export default function ProductsPage() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const importRef = useRef<HTMLInputElement | null>(null);
+
+  const initialSearch = searchParams.get("q") ?? "";
+  const initialCategory = searchParams.get("category") ?? "all";
+  const initialStatus = searchParams.get("status") ?? "all";
+  const initialLocation = searchParams.get("location") ?? "all";
+  const initialPage = Number(searchParams.get("page") ?? "1");
+  const initialLimit = Number(searchParams.get("limit") ?? "20");
+
   const [rows, setRows] = useState<ProductRow[]>([]);
   const [categories, setCategories] = useState<ApiCategory[]>([]);
+  const [locations, setLocations] = useState<components["schemas"]["Location"][]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [search, setSearch] = useState(initialSearch);
+  const [categoryFilter, setCategoryFilter] = useState(initialCategory);
+  const [statusFilter, setStatusFilter] = useState(initialStatus);
+  const [locationFilter, setLocationFilter] = useState(initialLocation);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(Number.isFinite(initialPage) && initialPage > 0 ? initialPage : 1);
+  const [pageSize, setPageSize] =
+    useState(Number.isFinite(initialLimit) && initialLimit > 0 ? initialLimit : 20);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  const [assignCategoryId, setAssignCategoryId] = useState("all");
+  const [isBulkActionLoading, setIsBulkActionLoading] = useState(false);
+
+  const mapProduct = (item: ApiProduct): ProductRow => ({
+    id: item.id ?? crypto.randomUUID(),
+    name: item.name ?? "Unnamed product",
+    sku: item.sku ?? "N/A",
+    categoryId: item.category_id ?? "",
+    category: item.category_name ?? "Uncategorized",
+    rawTaxRate: item.tax_rate,
+    basePrice: item.base_price ? `$${item.base_price}` : "$0.00",
+    vat: item.tax_rate ? `${item.tax_rate}%` : "-",
+    stock: item.is_active ? "In Stock" : "Out of Stock",
+    visible: item.is_active ?? true,
+    locationOverride: "",
+  });
+
+  const buildTableQuery = () => {
+    const params = new URLSearchParams();
+    if (search.trim()) params.set("search", search.trim());
+    if (categoryFilter !== "all") params.set("category_id", categoryFilter);
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (locationFilter !== "all") params.set("location_id", locationFilter);
+    params.set("page", String(page));
+    params.set("limit", String(pageSize));
+    return params;
+  };
 
   const fetchProducts = async () => {
     try {
       setIsLoading(true);
       setError("");
-      const [productsResponse, categoriesResponse] = await Promise.all([
-        orderzillaApi.dashboard.products.list(),
+      const [tableResponse, categoriesResponse, locationsResponse] = await Promise.all([
+        fetch(`/api/dashboard/products-table?${buildTableQuery().toString()}`, {
+          method: "GET",
+          headers: { accept: "application/json" },
+          cache: "no-store",
+        }).then((res) => res.json() as Promise<TableResponse>),
         orderzillaApi.dashboard.categories.list(),
+        orderzillaApi.dashboard.locations.list(),
       ]);
 
-      const productItems = (productsResponse?.products ?? []) as ApiProduct[];
+      const productItems = (tableResponse?.products ?? []) as ApiProduct[];
+      const pagination = tableResponse?.pagination;
+      setRows(productItems.map(mapProduct));
       setCategories((categoriesResponse?.categories ?? []) as ApiCategory[]);
-      setRows(
-        productItems.map((item) => ({
-          id: item.id ?? crypto.randomUUID(),
-          name: item.name ?? "Unnamed product",
-          sku: item.sku ?? "N/A",
-          category: item.category_name ?? "Uncategorized",
-          basePrice: item.base_price ? `$${item.base_price}` : "$0.00",
-          vat: item.tax_rate ? `${item.tax_rate}%` : "-",
-          stock: item.is_active ? "In Stock" : "Out of Stock",
-          visible: item.is_active ?? true,
-          locationOverride: "",
-        })),
-      );
+      setLocations((locationsResponse?.locations ?? []) as components["schemas"]["Location"][]);
+      setTotalItems(pagination?.total_items ?? productItems.length);
+      setTotalPages(pagination?.total_pages ?? 1);
+      setPage(pagination?.current_page ?? page);
     } catch {
       setError("Failed to load products.");
+      setRows([]);
+      setTotalItems(0);
+      setTotalPages(1);
     } finally {
       setIsLoading(false);
     }
@@ -100,32 +158,180 @@ export default function ProductsPage() {
 
   useEffect(() => {
     fetchProducts();
-  }, []);
+  }, [page, pageSize, search, categoryFilter, statusFilter, locationFilter]);
 
-  const visibleRows = useMemo(() => {
-    return rows.filter((row) => {
-      const matchesSearch =
-        row.name.toLowerCase().includes(search.toLowerCase()) ||
-        row.sku.toLowerCase().includes(search.toLowerCase());
-      const matchesCategory =
-        categoryFilter === "all" || row.category.toLowerCase() === categoryFilter.toLowerCase();
-      const matchesStatus =
-        statusFilter === "all" ||
-        (statusFilter === "active" ? row.visible : !row.visible);
-      return matchesSearch && matchesCategory && matchesStatus;
-    });
-  }, [rows, search, categoryFilter, statusFilter]);
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (search.trim()) params.set("q", search.trim());
+    if (categoryFilter !== "all") params.set("category", categoryFilter);
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (locationFilter !== "all") params.set("location", locationFilter);
+    if (page !== 1) params.set("page", String(page));
+    if (pageSize !== 20) params.set("limit", String(pageSize));
+    const nextQuery = params.toString();
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+    }
+  }, [search, categoryFilter, statusFilter, locationFilter, page, pageSize, pathname, router, searchParams]);
 
-  const totalItems = visibleRows.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const paginatedRows = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return visibleRows.slice(start, start + pageSize);
-  }, [visibleRows, currentPage, pageSize]);
-
+  const paginatedRows = useMemo(() => rows, [rows]);
+  const currentPage = Math.min(page, Math.max(1, totalPages));
   const allVisibleSelected =
     paginatedRows.length > 0 && paginatedRows.every((row) => selectedIds.includes(row.id));
+
+  const updateProductsVisibility = async (nextVisible: boolean) => {
+    if (selectedIds.length === 0) {
+      toast("Select products first.");
+      return;
+    }
+    try {
+      setIsBulkActionLoading(true);
+      await Promise.all(
+        rows
+          .filter((row) => selectedIds.includes(row.id))
+          .map((row) =>
+            orderzillaApi.dashboard.products.update(row.id, {
+              body: {
+                name: row.name,
+                category_id: row.categoryId || undefined,
+                sku: row.sku === "N/A" ? undefined : row.sku,
+                tax_rate: row.rawTaxRate,
+                is_active: nextVisible,
+              } as never,
+            }),
+          ),
+      );
+      toast.success(`Updated ${selectedIds.length} products.`);
+      setSelectedIds([]);
+      fetchProducts();
+    } catch {
+      toast.error("Failed to update products.");
+    } finally {
+      setIsBulkActionLoading(false);
+    }
+  };
+
+  const bulkDeleteProducts = async () => {
+    if (selectedIds.length === 0) {
+      toast("Select products first.");
+      return;
+    }
+    try {
+      setIsBulkActionLoading(true);
+      await Promise.all(selectedIds.map((id) => orderzillaApi.dashboard.products.remove(id)));
+      toast.success(`Deleted ${selectedIds.length} products.`);
+      setSelectedIds([]);
+      fetchProducts();
+    } catch {
+      toast.error("Failed to delete products.");
+    } finally {
+      setIsBulkActionLoading(false);
+    }
+  };
+
+  const assignCategory = async () => {
+    if (selectedIds.length === 0) {
+      toast("Select products first.");
+      return;
+    }
+    if (assignCategoryId === "all") {
+      toast.error("Choose a target category.");
+      return;
+    }
+    const targetCategory = categories.find((category) => category.id === assignCategoryId);
+    try {
+      setIsBulkActionLoading(true);
+      await Promise.all(
+        rows
+          .filter((row) => selectedIds.includes(row.id))
+          .map((row) =>
+            orderzillaApi.dashboard.products.update(row.id, {
+              body: {
+                name: row.name,
+                category_id: assignCategoryId,
+                sku: row.sku === "N/A" ? undefined : row.sku,
+                tax_rate: row.rawTaxRate,
+                is_active: row.visible,
+              } as never,
+            }),
+          ),
+      );
+      toast.success(`Assigned ${selectedIds.length} products to ${targetCategory?.name ?? "category"}.`);
+      setSelectedIds([]);
+      fetchProducts();
+    } catch {
+      toast.error("Failed to assign category.");
+    } finally {
+      setIsBulkActionLoading(false);
+    }
+  };
+
+  const parseCsvLine = (line: string) => line.split(",").map((token) => token.trim());
+
+  const importProducts = async (file: File) => {
+    try {
+      const text = await file.text();
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (lines.length <= 1) {
+        toast.error("CSV file is empty.");
+        return;
+      }
+      const header = parseCsvLine(lines[0]).map((token) => token.toLowerCase());
+      const idxName = header.indexOf("name");
+      const idxSku = header.indexOf("sku");
+      const idxCategoryId = header.indexOf("category_id");
+      const idxCategoryName = header.indexOf("category_name");
+      const idxTaxRate = header.indexOf("tax_rate");
+      if (idxName < 0) {
+        toast.error("CSV must include 'name' column.");
+        return;
+      }
+
+      const categoryByName = new Map(
+        categories.map((category) => [(category.name ?? "").toLowerCase(), category.id ?? ""]),
+      );
+
+      const payloads = lines.slice(1).map((line) => {
+        const cols = parseCsvLine(line);
+        const categoryIdRaw = idxCategoryId >= 0 ? cols[idxCategoryId] : "";
+        const categoryNameRaw = idxCategoryName >= 0 ? cols[idxCategoryName] : "";
+        const resolvedCategoryId =
+          categoryIdRaw || categoryByName.get((categoryNameRaw ?? "").toLowerCase()) || undefined;
+        const taxRate = idxTaxRate >= 0 ? Number(cols[idxTaxRate]) : undefined;
+        return {
+          name: (cols[idxName] ?? "").trim(),
+          sku: idxSku >= 0 ? cols[idxSku] || undefined : undefined,
+          category_id: resolvedCategoryId,
+          tax_rate: Number.isFinite(taxRate) ? taxRate : undefined,
+        };
+      });
+
+      const validPayloads = payloads.filter((payload) => payload.name.length > 0);
+      if (validPayloads.length === 0) {
+        toast.error("No valid product rows found.");
+        return;
+      }
+
+      setIsBulkActionLoading(true);
+      await Promise.all(
+        validPayloads.map((payload) =>
+          orderzillaApi.dashboard.products.create({
+            body: payload as never,
+          }),
+        ),
+      );
+      toast.success(`Imported ${validPayloads.length} products.`);
+      fetchProducts();
+    } catch {
+      toast.error("Failed to import products.");
+    } finally {
+      setIsBulkActionLoading(false);
+      if (importRef.current) importRef.current.value = "";
+    }
+  };
 
   return (
     <div className="p-3 md:p-4 lg:p-5">
@@ -135,37 +341,63 @@ export default function ProductsPage() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[12px] font-medium text-[#768091]">Location filter</span>
             <SelectMenu
-              value="all"
-              onChange={() => undefined}
-              options={[{ label: "All Locations", value: "all" }]}
+              value={locationFilter}
+              onChange={(value) => {
+                setLocationFilter(value);
+                setPage(1);
+              }}
+              options={[
+                { label: "All Locations", value: "all" },
+                ...locations.map((location, index) => ({
+                  label: location.name ?? "Unnamed location",
+                  value: location.id ?? `missing-location-${index}`,
+                })),
+              ]}
               className="min-w-[140px]"
             />
             <SelectMenu
               value={categoryFilter}
-              onChange={setCategoryFilter}
+              onChange={(value) => {
+                setCategoryFilter(value);
+                setPage(1);
+              }}
               options={[
                 { label: "All Categories", value: "all" },
-                ...categories.map((cat) => ({
+                ...categories.map((cat, index) => ({
                   label: cat.name ?? "Unnamed",
-                  value: (cat.name ?? "Unnamed").toLowerCase(),
+                  value: cat.id ?? `missing-category-id-${index}`,
                 })),
               ]}
               className="min-w-[140px]"
             />
             <button
               type="button"
+              onClick={() => importRef.current?.click()}
+              disabled={isBulkActionLoading}
               className="h-9 rounded-lg border border-[#e4e6ea] bg-white px-4 text-[12px] font-semibold text-[#414855]"
             >
               Import
             </button>
+            <input
+              ref={importRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) importProducts(file);
+              }}
+            />
             <button
               type="button"
+              onClick={() => toast("Create product page is not available yet.")}
               className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512]"
             >
               + Add Product
             </button>
           </div>
         </div>
+
         {error ? (
           <div className="mt-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
             {error}{" "}
@@ -180,43 +412,50 @@ export default function ProductsPage() {
             <Search size={15} className="text-[#97a0ad]" />
             <input
               placeholder="Search by product name or SKU"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
               className="w-full text-[12px] text-[#2f3642] outline-none placeholder:text-[#9aa3ae]"
             />
           </div>
           <div className="flex flex-wrap items-center gap-2 xl:justify-end">
             <span className="text-[12px] font-semibold text-[#4e5664] px-1">Status</span>
-              <SelectMenu
-                value={statusFilter}
-                onChange={setStatusFilter}
-                options={[
-                  { label: "All Statuses", value: "all" },
-                  { label: "Active", value: "active" },
-                  { label: "Inactive", value: "inactive" },
-                ]}
-                className="min-w-[130px]"
-              />
-              <button
-                type="button"
-                className="h-9 rounded-lg border border-[#e4e6ea] bg-white px-3 inline-flex items-center gap-2 text-[12px] font-medium text-[#424a56]"
-              >
-                <span>Price range</span>
-                <ChevronDown size={13} />
-              </button>
-              <button
-                type="button"
-                className="h-9 rounded-lg border border-[#e4e6ea] bg-white px-3 inline-flex items-center gap-2 text-[12px] font-medium text-[#424a56]"
-              >
-                <span>Availability</span>
-                <ChevronDown size={13} />
-              </button>
+            <SelectMenu
+              value={statusFilter}
+              onChange={(value) => {
+                setStatusFilter(value);
+                setPage(1);
+              }}
+              options={[
+                { label: "All Statuses", value: "all" },
+                { label: "Active", value: "active" },
+                { label: "Inactive", value: "inactive" },
+              ]}
+              className="min-w-[130px]"
+            />
+            <button
+              type="button"
+              className="h-9 rounded-lg border border-[#e4e6ea] bg-white px-3 inline-flex items-center gap-2 text-[12px] font-medium text-[#424a56]"
+            >
+              <span>Price range</span>
+              <ChevronDown size={13} />
+            </button>
+            <button
+              type="button"
+              className="h-9 rounded-lg border border-[#e4e6ea] bg-white px-3 inline-flex items-center gap-2 text-[12px] font-medium text-[#424a56]"
+            >
+              <span>Availability</span>
+              <ChevronDown size={13} />
+            </button>
             <button
               type="button"
               onClick={() => {
                 setSearch("");
                 setCategoryFilter("all");
                 setStatusFilter("all");
+                setLocationFilter("all");
                 setPage(1);
               }}
               className="text-[12px] font-semibold text-[#6385b5] ml-1"
@@ -232,135 +471,182 @@ export default function ProductsPage() {
           </div>
         ) : (
           <div className="mt-4 overflow-x-auto rounded-xl border border-[#e4e6ea]">
-          <table className="w-full min-w-[980px]">
-            <thead className="bg-[#f8f9fb] border-b border-[#e9ebef]">
-              <tr className="text-[13px] text-[#6e7785] text-left">
-                <th className="px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={allVisibleSelected}
-                    onChange={(e) =>
-                      setSelectedIds((prev) =>
-                        e.target.checked
-                          ? Array.from(new Set([...prev, ...paginatedRows.map((r) => r.id)]))
-                          : prev.filter((id) => !paginatedRows.some((row) => row.id === id)),
-                      )
-                    }
-                    className="h-4 w-4 rounded border-[#cfd5de]"
-                  />
-                </th>
-                <th className="px-2 py-2 font-semibold">Product Name</th>
-                <th className="px-2 py-2 font-semibold">Category</th>
-                <th className="px-2 py-2 font-semibold">Base Price</th>
-                <th className="px-2 py-2 font-semibold">VAT Rate</th>
-                <th className="px-2 py-2 font-semibold">Stock Status</th>
-                <th className="px-2 py-2 font-semibold">Visibility</th>
-                <th className="px-2 py-2 font-semibold">Location Override</th>
-                <th className="px-3 py-2 font-semibold text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paginatedRows.map((product, index) => (
-                <tr
-                  key={product.id}
-                  className={`border-b last:border-b-0 border-[#edf0f4] text-[13px] ${
-                    index === 1 || index === 3 ? "bg-[#f6f7f9]" : "bg-white"
-                  }`}
-                >
-                  <td className="px-3 py-3">
+            <table className="w-full min-w-[980px]">
+              <thead className="bg-[#f8f9fb] border-b border-[#e9ebef]">
+                <tr className="text-[13px] text-[#6e7785] text-left">
+                  <th className="px-3 py-2">
                     <input
                       type="checkbox"
-                      checked={selectedIds.includes(product.id)}
+                      checked={allVisibleSelected}
                       onChange={(e) =>
                         setSelectedIds((prev) =>
                           e.target.checked
-                            ? [...prev, product.id]
-                            : prev.filter((id) => id !== product.id),
+                            ? Array.from(new Set([...prev, ...paginatedRows.map((r) => r.id)]))
+                            : prev.filter((id) => !paginatedRows.some((row) => row.id === id)),
                         )
                       }
                       className="h-4 w-4 rounded border-[#cfd5de]"
                     />
-                  </td>
-                  <td className="px-2 py-3">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`h-12 w-12 rounded-lg ${
-                          index % 2 === 0
-                            ? "bg-gradient-to-br from-[#5b3b28] to-[#bb7237]"
-                            : "bg-gradient-to-br from-[#6a5a44] to-[#d8b183]"
-                        }`}
-                      />
-                      <div>
-                        <Link
-                          href={`/dashboard/products/edit-product?id=${product.id}`}
-                          className="text-[20px] leading-tight font-bold text-[#1d2430] hover:underline"
-                        >
-                          {product.name}
-                        </Link>
-                        <p className="text-[12px] text-[#7a8291]">{product.sku}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-2 py-3">
-                    <span className="rounded-full bg-[#eceef2] px-2.5 py-1 text-[12px] font-semibold text-[#505864]">
-                      {product.category}
-                    </span>
-                  </td>
-                  <td className="px-2 py-3 font-semibold text-[#2a313d]">{product.basePrice}</td>
-                  <td className="px-2 py-3 text-[#3e4653]">{product.vat}</td>
-                  <td className="px-2 py-3">
-                    <span
-                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${stockClass(
-                        product.stock,
-                      )}`}
-                    >
-                      {product.stock}
-                    </span>
-                  </td>
-                  <td className="px-2 py-3">
-                    <Toggle
-                      active={product.visible}
-                      onToggle={(next) => {
-                        setRows((prev) =>
-                          prev.map((row) => (row.id === product.id ? { ...row, visible: next } : row)),
-                        );
-                      }}
-                    />
-                  </td>
-                  <td className="px-2 py-3 text-[#687181]">
-                    {product.locationOverride === "pin" && <MapPin size={17} />}
-                    {product.locationOverride === "tag" && <Tag size={17} />}
-                  </td>
-                  <td className="px-3 py-3 text-right">
-                    <RowActionMenu
-                      actions={[
-                        { label: "Edit product", onClick: () => undefined },
-                        {
-                          label: product.visible ? "Deactivate" : "Activate",
-                          onClick: () => {
-                            const next = !product.visible;
-                            setRows((prev) =>
-                              prev.map((row) =>
-                                row.id === product.id ? { ...row, visible: next } : row,
-                              ),
-                            );
-                          },
-                        },
-                        {
-                          label: "Delete product",
-                          danger: true,
-                          onClick: async () => {
-                            setRows((prev) => prev.filter((row) => row.id !== product.id));
-                            await orderzillaApi.dashboard.products.remove(product.id);
-                          },
-                        },
-                      ]}
-                    />
-                  </td>
+                  </th>
+                  <th className="px-2 py-2 font-semibold">Product Name</th>
+                  <th className="px-2 py-2 font-semibold">Category</th>
+                  <th className="px-2 py-2 font-semibold">Base Price</th>
+                  <th className="px-2 py-2 font-semibold">VAT Rate</th>
+                  <th className="px-2 py-2 font-semibold">Stock Status</th>
+                  <th className="px-2 py-2 font-semibold">Visibility</th>
+                  <th className="px-2 py-2 font-semibold">Location Override</th>
+                  <th className="px-3 py-2 font-semibold text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {paginatedRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-10 text-center text-[13px] text-[#717c8e]">
+                      No products found.
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedRows.map((product, index) => (
+                    <tr
+                      key={product.id}
+                      className={`border-b last:border-b-0 border-[#edf0f4] text-[13px] ${
+                        index === 1 || index === 3 ? "bg-[#f6f7f9]" : "bg-white"
+                      }`}
+                    >
+                      <td className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(product.id)}
+                          onChange={(e) =>
+                            setSelectedIds((prev) =>
+                              e.target.checked
+                                ? [...prev, product.id]
+                                : prev.filter((id) => id !== product.id),
+                            )
+                          }
+                          className="h-4 w-4 rounded border-[#cfd5de]"
+                        />
+                      </td>
+                      <td className="px-2 py-3">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={`h-12 w-12 rounded-lg ${
+                              index % 2 === 0
+                                ? "bg-gradient-to-br from-[#5b3b28] to-[#bb7237]"
+                                : "bg-gradient-to-br from-[#6a5a44] to-[#d8b183]"
+                            }`}
+                          />
+                          <div>
+                            <Link
+                              href={`/dashboard/products/edit-product?id=${product.id}`}
+                              className="text-[20px] leading-tight font-bold text-[#1d2430] hover:underline"
+                            >
+                              {product.name}
+                            </Link>
+                            <p className="text-[12px] text-[#7a8291]">{product.sku}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-2 py-3">
+                        <span className="rounded-full bg-[#eceef2] px-2.5 py-1 text-[12px] font-semibold text-[#505864]">
+                          {product.category}
+                        </span>
+                      </td>
+                      <td className="px-2 py-3 font-semibold text-[#2a313d]">{product.basePrice}</td>
+                      <td className="px-2 py-3 text-[#3e4653]">{product.vat}</td>
+                      <td className="px-2 py-3">
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${stockClass(
+                            product.stock,
+                          )}`}
+                        >
+                          {product.stock}
+                        </span>
+                      </td>
+                      <td className="px-2 py-3">
+                        <Toggle
+                          active={product.visible}
+                          onToggle={async (next) => {
+                            try {
+                              await orderzillaApi.dashboard.products.update(product.id, {
+                                body: {
+                                  name: product.name,
+                                  category_id: product.categoryId || undefined,
+                                  sku: product.sku === "N/A" ? undefined : product.sku,
+                                  tax_rate: product.rawTaxRate,
+                                  is_active: next,
+                                } as never,
+                              });
+                              setRows((prev) =>
+                                prev.map((row) =>
+                                  row.id === product.id
+                                    ? { ...row, visible: next, stock: next ? "In Stock" : "Out of Stock" }
+                                    : row,
+                                ),
+                              );
+                              toast.success(`Product ${next ? "activated" : "deactivated"}.`);
+                            } catch {
+                              toast.error("Failed to update product.");
+                            }
+                          }}
+                        />
+                      </td>
+                      <td className="px-2 py-3 text-[#687181]">
+                        {product.locationOverride === "pin" && <MapPin size={17} />}
+                        {product.locationOverride === "tag" && <Tag size={17} />}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        <RowActionMenu
+                          actions={[
+                            { label: "Edit product", onClick: () => router.push(`/dashboard/products/edit-product?id=${product.id}`) },
+                            {
+                              label: product.visible ? "Deactivate" : "Activate",
+                              onClick: async () => {
+                                const next = !product.visible;
+                                try {
+                                  await orderzillaApi.dashboard.products.update(product.id, {
+                                    body: {
+                                      name: product.name,
+                                      category_id: product.categoryId || undefined,
+                                      sku: product.sku === "N/A" ? undefined : product.sku,
+                                      tax_rate: product.rawTaxRate,
+                                      is_active: next,
+                                    } as never,
+                                  });
+                                  setRows((prev) =>
+                                    prev.map((row) =>
+                                      row.id === product.id
+                                        ? { ...row, visible: next, stock: next ? "In Stock" : "Out of Stock" }
+                                        : row,
+                                    ),
+                                  );
+                                  toast.success(`Product ${next ? "activated" : "deactivated"}.`);
+                                } catch {
+                                  toast.error("Failed to update product.");
+                                }
+                              },
+                            },
+                            {
+                              label: "Delete product",
+                              danger: true,
+                              onClick: async () => {
+                                try {
+                                  await orderzillaApi.dashboard.products.remove(product.id);
+                                  setRows((prev) => prev.filter((row) => row.id !== product.id));
+                                  toast.success("Product deleted.");
+                                } catch {
+                                  toast.error("Failed to delete product.");
+                                }
+                              },
+                            },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         )}
 
@@ -369,24 +655,51 @@ export default function ProductsPage() {
             <p className="text-[13px] font-medium text-[#6e7785]">{selectedIds.length} products selected</p>
             <button
               type="button"
+              disabled={isBulkActionLoading}
+              onClick={() => updateProductsVisibility(true)}
               className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#3f4653]"
             >
               Activate
             </button>
             <button
               type="button"
+              disabled={isBulkActionLoading}
+              onClick={() => updateProductsVisibility(false)}
               className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#3f4653]"
             >
               Deactivate
             </button>
+            <SelectMenu
+              value={assignCategoryId}
+              onChange={setAssignCategoryId}
+              options={[
+                { label: "Select category", value: "all" },
+                ...categories.map((cat, index) => ({
+                  label: cat.name ?? "Unnamed",
+                  value: cat.id ?? `missing-category-id-${index}`,
+                })),
+              ]}
+              className="min-w-[160px]"
+            />
             <button
               type="button"
+              disabled={isBulkActionLoading}
+              onClick={assignCategory}
               className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#3f4653]"
             >
               Assign Category
             </button>
             <button
               type="button"
+              onClick={() => router.push("/categories/create-category")}
+              className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#3f4653]"
+            >
+              Create Category
+            </button>
+            <button
+              type="button"
+              disabled={isBulkActionLoading}
+              onClick={bulkDeleteProducts}
               className="h-9 rounded-lg bg-[#ef4a4c] px-4 text-[12px] font-semibold text-white"
             >
               Delete
@@ -403,8 +716,12 @@ export default function ProductsPage() {
           totalItems={totalItems}
           pageSize={pageSize}
           label="products"
-          onPageChange={(nextPage) => setPage(nextPage)}
+          onPageChange={(nextPage) => {
+            setSelectedIds([]);
+            setPage(nextPage);
+          }}
           onPageSizeChange={(nextPageSize) => {
+            setSelectedIds([]);
             setPage(1);
             setPageSize(nextPageSize);
           }}

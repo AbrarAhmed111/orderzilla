@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import { Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
 import TablePagination from "@/components/dashboard/ui/TablePagination";
-import { orderzillaApi } from "@/lib/api";
+import { orderzillaApi } from "@/lib/api/orderzilla-api";
 import type { components } from "@/types/orderzilla-openapi";
 
 type ApiCustomer = components["schemas"]["LoyaltyCustomer"];
@@ -16,7 +18,7 @@ type CustomerRow = {
   name: string;
   email: string;
   phone: string;
-  tier: "Gold" | "Silver" | "Bronze";
+  tier: "Gold" | "Silver" | "Bronze" | "Platinum";
   points: number;
   orders: number;
   spend: string;
@@ -24,6 +26,13 @@ type CustomerRow = {
 };
 
 function TierBadge({ tier }: { tier: string }) {
+  if (tier === "Platinum") {
+    return (
+      <span className="rounded-full bg-[#e9d5ff] px-2.5 py-1 text-[11px] font-semibold text-[#6b21a8]">
+        Platinum
+      </span>
+    );
+  }
   if (tier === "Gold") {
     return (
       <span className="rounded-full bg-[#f6df8c] px-2.5 py-1 text-[11px] font-semibold text-[#7a5a14]">
@@ -46,17 +55,49 @@ function TierBadge({ tier }: { tier: string }) {
 }
 
 export default function CustomersPage() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
   const [rows, setRows] = useState<CustomerRow[]>([]);
-  const [search, setSearch] = useState("");
-  const [tierFilter, setTierFilter] = useState("all");
+  const [searchInput, setSearchInput] = useState(searchParams.get("search") ?? "");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
 
-  const fetchCustomers = async () => {
+  const search = searchParams.get("search") ?? "";
+  const tierFilter = searchParams.get("tier") ?? "all";
+  const page = Number(searchParams.get("page") ?? "1") || 1;
+  const pageSize = Number(searchParams.get("limit") ?? "20") || 20;
+
+  const syncQuery = useCallback(
+    (patch: Record<string, string | number | undefined>) => {
+      const next = new URLSearchParams(searchParams.toString());
+      Object.entries(patch).forEach(([key, value]) => {
+        if (value === undefined || value === "" || value === "all") {
+          next.delete(key);
+        } else {
+          next.set(key, String(value));
+        }
+      });
+      router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  useEffect(() => {
+    setSearchInput(search);
+  }, [search]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      syncQuery({ search: searchInput.trim() || undefined, page: 1 });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [searchInput, syncQuery]);
+
+  const fetchCustomers = useCallback(async () => {
     try {
       setIsLoading(true);
       setError("");
@@ -79,7 +120,9 @@ export default function CustomersPage() {
           email: customer.email ?? "-",
           phone: customer.phone ?? "-",
           tier:
-            customer.tier === "GOLD"
+            customer.tier === "PLATINUM"
+              ? "Platinum"
+              : customer.tier === "GOLD"
               ? "Gold"
               : customer.tier === "SILVER"
                 ? "Silver"
@@ -93,20 +136,54 @@ export default function CustomersPage() {
       const pagination = response?.pagination;
       setTotalItems(pagination?.total_items ?? customers.length);
       setTotalPages(pagination?.total_pages ?? 1);
-      setPage(pagination?.current_page ?? page);
     } catch {
       setError("Failed to load customers.");
+      setRows([]);
+      setTotalItems(0);
+      setTotalPages(1);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [page, pageSize, search, tierFilter]);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      fetchCustomers();
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [search, tierFilter, page, pageSize]);
+    fetchCustomers();
+  }, [fetchCustomers]);
+
+  const handleCreateCustomer = async () => {
+    const cardNumber = window.prompt("Card number (required)")?.trim() ?? "";
+    if (!cardNumber) {
+      toast.error("Card number is required.");
+      return;
+    }
+
+    const firstName = window.prompt("First name (optional)")?.trim() ?? "";
+    const lastName = window.prompt("Last name (optional)")?.trim() ?? "";
+    const email = window.prompt("Email (optional)")?.trim() ?? "";
+    const phone = window.prompt("Phone (optional)")?.trim() ?? "";
+    const birthDate = window.prompt("Birth date YYYY-MM-DD (optional)")?.trim() ?? "";
+
+    const loadingToast = toast.loading("Creating customer...");
+    try {
+      await orderzillaApi.dashboard.loyalty.customers.create({
+        body: {
+          card_number: cardNumber,
+          first_name: firstName || undefined,
+          last_name: lastName || undefined,
+          email: email || undefined,
+          phone: phone || undefined,
+          birth_date: birthDate || undefined,
+        },
+      });
+      toast.success("Customer created.");
+      syncQuery({ page: 1 });
+      await fetchCustomers();
+    } catch {
+      toast.error("Failed to create customer.");
+    } finally {
+      toast.dismiss(loadingToast);
+    }
+  };
 
   return (
     <div className="p-3 md:p-4 lg:p-5">
@@ -117,11 +194,11 @@ export default function CustomersPage() {
             <SelectMenu
               value={tierFilter}
               onChange={(value) => {
-                setTierFilter(value);
-                setPage(1);
+                syncQuery({ tier: value, page: 1 });
               }}
               options={[
                 { label: "All Tiers", value: "all" },
+                { label: "Platinum", value: "platinum" },
                 { label: "Gold", value: "gold" },
                 { label: "Silver", value: "silver" },
                 { label: "Bronze", value: "bronze" },
@@ -130,6 +207,7 @@ export default function CustomersPage() {
             />
             <button
               type="button"
+              onClick={handleCreateCustomer}
               className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[13px] font-semibold text-[#1d2512]"
             >
               + Add Customer
@@ -149,11 +227,8 @@ export default function CustomersPage() {
           <Search size={16} className="text-[#97a0ad]" />
           <input
             placeholder="Search by name, email, or phone"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             className="w-full text-[13px] text-[#2f3642] outline-none placeholder:text-[#9aa3ae]"
           />
         </div>
@@ -178,7 +253,14 @@ export default function CustomersPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((customer, index) => (
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-3 py-12 text-center text-[13px] text-[#717c8e]">
+                    No customers found.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((customer, index) => (
                 <tr
                   key={customer.id}
                   className={`border-b last:border-b-0 border-[#edf0f4] text-[13px] ${
@@ -218,7 +300,8 @@ export default function CustomersPage() {
                     </Link>
                   </td>
                 </tr>
-              ))}
+                ))
+              )}
             </tbody>
           </table>
           </div>
@@ -229,10 +312,9 @@ export default function CustomersPage() {
           totalItems={totalItems}
           pageSize={pageSize}
           label="customers"
-          onPageChange={(nextPage) => setPage(nextPage)}
+          onPageChange={(nextPage) => syncQuery({ page: nextPage })}
           onPageSizeChange={(nextPageSize) => {
-            setPage(1);
-            setPageSize(nextPageSize);
+            syncQuery({ page: 1, limit: nextPageSize });
           }}
         />
       </section>

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { GripVertical, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import RowActionMenu from "@/components/dashboard/ui/RowActionMenu";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
@@ -16,6 +17,7 @@ type CategoryRow = {
   products: number;
   active: boolean;
   color: string;
+  imageUrl: string | null;
 };
 
 const colorPresets = [
@@ -53,26 +55,48 @@ function Toggle({
 
 export default function CategoriesPage() {
   const [rows, setRows] = useState<CategoryRow[]>([]);
+  const [allRows, setAllRows] = useState<CategoryRow[]>([]);
+  const [locationFilter, setLocationFilter] = useState("all");
+  const [locationOptions, setLocationOptions] = useState<Array<{ label: string; value: string }>>([
+    { label: "All Locations", value: "all" },
+  ]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [isSavingSort, setIsSavingSort] = useState(false);
 
   const fetchCategories = async () => {
     try {
       setIsLoading(true);
       setError("");
-      const response = await orderzillaApi.dashboard.categories.list();
+      const [response, locationsResponse] = await Promise.all([
+        orderzillaApi.dashboard.categories.list(),
+        orderzillaApi.dashboard.locations.list(),
+      ]);
       const categories = (response?.categories ?? []) as components["schemas"]["Category"][];
-      setRows(
-        categories.map((category, index) => ({
-          id: category.id ?? crypto.randomUUID(),
-          name: category.name ?? "Unnamed category",
-          products: category.product_count ?? 0,
-          active: category.is_active ?? true,
-          color: colorPresets[index % colorPresets.length],
-        })),
-      );
+      const mapped = categories.map((category, index) => ({
+        id: category.id ?? crypto.randomUUID(),
+        name: category.name ?? "Unnamed category",
+        products: Number(category.product_count ?? 0),
+        active: category.is_active ?? true,
+        color: colorPresets[index % colorPresets.length],
+        imageUrl: category.image_url ?? null,
+      }));
+      setAllRows(mapped);
+      setRows(mapped);
+      const locations = (locationsResponse?.locations ?? []) as components["schemas"]["Location"][];
+      setLocationOptions([
+        { label: "All Locations", value: "all" },
+        ...locations
+          .filter((location) => Boolean(location.id))
+          .map((location) => ({
+            label: location.name ?? "Unnamed location",
+            value: location.id ?? "",
+          })),
+      ]);
     } catch {
       setError("Failed to load categories.");
     } finally {
@@ -84,6 +108,43 @@ export default function CategoriesPage() {
     fetchCategories();
   }, []);
 
+  const filterByLocation = async (locationId: string) => {
+    if (locationId === "all") {
+      setRows(allRows);
+      return;
+    }
+    try {
+      setIsLoading(true);
+      const terminalsResponse = await orderzillaApi.dashboard.terminals.list();
+      const terminals = ((terminalsResponse?.terminals ?? []) as components["schemas"]["Terminal"][]).filter(
+        (terminal) => terminal.location_id === locationId && Boolean(terminal.id),
+      );
+      if (terminals.length === 0) {
+        setRows([]);
+        return;
+      }
+      const overrideResponses = await Promise.all(
+        terminals.map((terminal) => orderzillaApi.dashboard.terminals.products.list(terminal.id ?? "")),
+      );
+      const categoryIds = new Set<string>();
+      overrideResponses.forEach((response) => {
+        (response?.products ?? []).forEach((product) => {
+          if (product.category_id) categoryIds.add(product.category_id);
+        });
+      });
+      setRows(allRows.filter((category) => categoryIds.has(category.id)));
+    } catch {
+      setError("Failed to filter categories by location.");
+      setRows(allRows);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    filterByLocation(locationFilter);
+  }, [locationFilter, allRows]);
+
   const totalItems = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -91,6 +152,59 @@ export default function CategoriesPage() {
     const start = (currentPage - 1) * pageSize;
     return rows.slice(start, start + pageSize);
   }, [rows, currentPage, pageSize]);
+
+  const persistSortOrder = async (nextRows: CategoryRow[]) => {
+    const previousRows = rows;
+    const previousAllRows = allRows;
+    setRows(nextRows);
+    if (locationFilter === "all") {
+      setAllRows(nextRows);
+    }
+    setIsSavingSort(true);
+    try {
+      await Promise.all(
+        nextRows.map((row, index) =>
+          orderzillaApi.dashboard.categories.update(row.id, {
+            body: {
+              name: row.name,
+              sort_order: index + 1,
+            } as never,
+          }),
+        ),
+      );
+      if (locationFilter !== "all") {
+        setAllRows((prev) => {
+          const sortOrderById = new Map(nextRows.map((row, index) => [row.id, index + 1]));
+          return [...prev].sort((a, b) => {
+            const aOrder = sortOrderById.get(a.id);
+            const bOrder = sortOrderById.get(b.id);
+            if (aOrder === undefined && bOrder === undefined) return 0;
+            if (aOrder === undefined) return 1;
+            if (bOrder === undefined) return -1;
+            return aOrder - bOrder;
+          });
+        });
+      }
+      toast.success("Category order updated.");
+    } catch {
+      setRows(previousRows);
+      setAllRows(previousAllRows);
+      toast.error("Failed to update category order.");
+    } finally {
+      setIsSavingSort(false);
+    }
+  };
+
+  const handleDropRow = async (targetId: string) => {
+    if (!draggingId || draggingId === targetId || isSavingSort) return;
+    const fromIndex = rows.findIndex((row) => row.id === draggingId);
+    const toIndex = rows.findIndex((row) => row.id === targetId);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const next = [...rows];
+    const [moved] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, moved);
+    await persistSortOrder(next);
+  };
 
   return (
     <div className="p-4">
@@ -100,11 +214,17 @@ export default function CategoriesPage() {
             Categories
           </h1>
           <div className="flex items-center gap-2">
+            {isSavingSort ? (
+              <span className="text-[12px] font-semibold text-[#7a8291]">Saving order...</span>
+            ) : null}
             <span className="text-[14px] font-medium text-[#768091]">Location filter</span>
             <SelectMenu
-              value="all"
-              onChange={() => undefined}
-              options={[{ label: "All Locations", value: "all" }]}
+              value={locationFilter}
+              onChange={(value) => {
+                setLocationFilter(value);
+                setPage(1);
+              }}
+              options={locationOptions}
               className="min-w-[150px]"
             />
             <Link
@@ -141,18 +261,42 @@ export default function CategoriesPage() {
           {paginatedRows.map((category, index) => (
             <div
               key={category.id}
+              draggable={!isSavingSort}
+              onDragStart={() => setDraggingId(category.id)}
+              onDragEnd={() => setDraggingId(null)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={async () => {
+                await handleDropRow(category.id);
+                setDraggingId(null);
+              }}
               className={`grid grid-cols-[40px_1fr_260px_70px] items-center gap-2 px-3 py-3 ${
                 index !== paginatedRows.length - 1 ? "border-b border-[#edf0f4]" : ""
-              } ${index === 0 ? "bg-[#f9fafc]" : "bg-white"}`}
+              } ${index === 0 ? "bg-[#f9fafc]" : "bg-white"} ${
+                draggingId === category.id ? "opacity-60" : ""
+              }`}
             >
-              <button type="button" className="text-[#a0a7b2]">
+              <button type="button" className="cursor-grab text-[#a0a7b2] active:cursor-grabbing">
                 <GripVertical size={18} />
               </button>
 
               <div className="flex items-center gap-3">
-                <div
-                  className={`h-12 w-12 rounded-lg bg-gradient-to-br ${category.color} shadow-inner`}
-                />
+                <div className="h-12 w-12 overflow-hidden rounded-lg border border-[#e5e7eb] bg-[#f8f9fb]">
+                  {category.imageUrl ? (
+                    <img
+                      src={
+                        category.imageUrl.startsWith("http")
+                          ? category.imageUrl
+                          : `/api/proxy${category.imageUrl}`
+                      }
+                      alt={category.name}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div
+                      className={`h-full w-full rounded-lg bg-gradient-to-br ${category.color} shadow-inner`}
+                    />
+                  )}
+                </div>
                 <div>
                   <p className="text-[24px] leading-tight font-semibold text-[#1d2430]">
                     {category.name}
@@ -165,12 +309,27 @@ export default function CategoriesPage() {
                 <Toggle
                   active={category.active}
                   onToggle={async (next) => {
+                    const previousRows = rows;
+                    const previousAllRows = allRows;
+                    setUpdatingId(category.id);
                     setRows((prev) =>
                       prev.map((row) => (row.id === category.id ? { ...row, active: next } : row)),
                     );
-                    await orderzillaApi.dashboard.categories.update(category.id, {
-                      body: { name: category.name },
-                    });
+                    setAllRows((prev) =>
+                      prev.map((row) => (row.id === category.id ? { ...row, active: next } : row)),
+                    );
+                    try {
+                      await orderzillaApi.dashboard.categories.update(category.id, {
+                        body: { name: category.name, is_active: next } as never,
+                      });
+                      toast.success(`Category ${next ? "enabled" : "hidden"} successfully.`);
+                    } catch {
+                      setRows(previousRows);
+                      setAllRows(previousAllRows);
+                      toast.error("Failed to update category visibility.");
+                    } finally {
+                      setUpdatingId(null);
+                    }
                   }}
                 />
                 <span
@@ -182,20 +341,47 @@ export default function CategoriesPage() {
                 >
                   {category.active ? "Active" : "Hidden"}
                 </span>
+                {updatingId === category.id ? (
+                  <span className="text-[11px] text-[#7a8291]">Saving...</span>
+                ) : null}
               </div>
 
               <div className="text-right">
                 <RowActionMenu
                   actions={[
-                    { label: "Edit category", onClick: () => undefined },
+                    {
+                      label: "Edit category",
+                      onClick: () => {
+                        window.location.href = `/categories/${category.id}/edit-category`;
+                      },
+                    },
                     {
                       label: category.active ? "Hide category" : "Show category",
-                      onClick: () =>
+                      onClick: () => {
+                        const target = rows.find((row) => row.id === category.id);
+                        if (!target) return;
+                        const next = !target.active;
+                        setUpdatingId(category.id);
+                        const previousRows = rows;
+                        const previousAllRows = allRows;
                         setRows((prev) =>
-                          prev.map((row) =>
-                            row.id === category.id ? { ...row, active: !row.active } : row,
-                          ),
-                        ),
+                          prev.map((row) => (row.id === category.id ? { ...row, active: next } : row)),
+                        );
+                        setAllRows((prev) =>
+                          prev.map((row) => (row.id === category.id ? { ...row, active: next } : row)),
+                        );
+                        orderzillaApi.dashboard.categories
+                          .update(category.id, {
+                            body: { name: category.name, is_active: next } as never,
+                          })
+                          .then(() => toast.success(`Category ${next ? "enabled" : "hidden"} successfully.`))
+                          .catch(() => {
+                            setRows(previousRows);
+                            setAllRows(previousAllRows);
+                            toast.error("Failed to update category visibility.");
+                          })
+                          .finally(() => setUpdatingId(null));
+                      },
                     },
                     {
                       label: "Delete category",
