@@ -165,7 +165,7 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
 
   return (
     <div className="p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-[14px] text-[#7a8291]">Customers / {name || "Customer"} / Edit</p>

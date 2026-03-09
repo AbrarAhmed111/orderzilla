@@ -144,7 +144,7 @@ export default function LoyaltyProgramSettingsPage() {
   return (
     <div className="p-4">
       <section className="rounded-2xl border border-[#e5e7eb] bg-white p-5 shadow-[0_2px_8px_rgba(15,23,42,0.05)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <h1 className="text-[30px] font-extrabold text-[#12161f]">Loyalty Program Settings</h1>
             <p className="text-[13px] text-[#717c8e]">

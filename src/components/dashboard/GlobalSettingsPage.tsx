@@ -382,8 +382,8 @@ export default function GlobalSettingsPage() {
   };
 
   return (
-    <div className="p-3 md:p-4 lg:p-5">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 md:px-5 md:py-5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+    <div className="p-3 sm:p-4 md:p-4 lg:p-5">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 md:px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-[36px] leading-none font-extrabold text-[#1a2029]">Global Settings</h1>
           <button

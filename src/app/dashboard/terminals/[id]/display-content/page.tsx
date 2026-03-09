@@ -1,14 +1,13 @@
 import TerminalDetailDisplayContentPage from "@/components/dashboard/TerminalDetailDisplayContentPage";
 
 type TerminalDisplayContentRouteProps = {
-  params: {
-    id: string;
-  };
+  params: Promise<{ id: string }>;
 };
 
-export default function DashboardTerminalDisplayContentRoute({
+export default async function DashboardTerminalDisplayContentRoute({
   params,
 }: TerminalDisplayContentRouteProps) {
-  return <TerminalDetailDisplayContentPage id={params.id} />;
+  const { id } = await params;
+  return <TerminalDetailDisplayContentPage id={id} />;
 }
 

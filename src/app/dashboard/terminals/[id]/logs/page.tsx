@@ -1,14 +1,13 @@
 import TerminalDetailLogsPage from "@/components/dashboard/TerminalDetailLogsPage";
 
 type TerminalLogsRouteProps = {
-  params: {
-    id: string;
-  };
+  params: Promise<{ id: string }>;
 };
 
-export default function DashboardTerminalLogsRoute({
+export default async function DashboardTerminalLogsRoute({
   params,
 }: TerminalLogsRouteProps) {
-  return <TerminalDetailLogsPage id={params.id} />;
+  const { id } = await params;
+  return <TerminalDetailLogsPage id={id} />;
 }
 

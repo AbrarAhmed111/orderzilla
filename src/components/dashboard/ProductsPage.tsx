@@ -363,10 +363,10 @@ export default function ProductsPage() {
   };
 
   return (
-    <div className="p-3 md:p-4 lg:p-5">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 md:px-5 md:py-5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-[42px] leading-none font-extrabold text-[#1a2029]">Products</h1>
+    <div className="p-3 sm:p-4 md:p-4 lg:p-5">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 md:px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <h1 className="text-[28px] sm:text-[36px] lg:text-[44px] leading-none font-extrabold text-[#1a2029]">Products</h1>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[12px] font-medium text-[#768091]">Location filter</span>
             <SelectMenu
@@ -382,7 +382,7 @@ export default function ProductsPage() {
                   value: location.id ?? `missing-location-${index}`,
                 })),
               ]}
-              className="min-w-[140px]"
+              className="min-w-[120px] sm:min-w-[140px]"
             />
             <SelectMenu
               value={categoryFilter}
@@ -397,7 +397,7 @@ export default function ProductsPage() {
                   value: cat.id ?? `missing-category-id-${index}`,
                 })),
               ]}
-              className="min-w-[140px]"
+              className="min-w-[120px] sm:min-w-[140px]"
             />
             <button
               type="button"
@@ -423,7 +423,7 @@ export default function ProductsPage() {
             <button
               type="button"
               onClick={() => router.push("/dashboard/products/create-product")}
-              className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512]"
+              className="h-9 rounded-lg bg-[#d4ff00] px-3 sm:px-4 text-[12px] font-semibold text-[#1d2512] shrink-0"
             >
               + Add Product
             </button>

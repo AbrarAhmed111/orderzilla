@@ -106,7 +106,10 @@ export default function CustomersPage() {
       const response = await orderzillaApi.dashboard.loyalty.customers.list({
         query: {
           search: search || undefined,
-          tier: tierFilter === "all" ? undefined : tierFilter.toUpperCase(),
+          tier:
+            tierFilter === "all"
+              ? undefined
+              : (tierFilter.toUpperCase() as "BRONZE" | "SILVER" | "GOLD" | "PLATINUM"),
           page,
           limit: pageSize,
         },
@@ -212,11 +215,11 @@ export default function CustomersPage() {
   };
 
   return (
-    <div className="p-3 md:p-4 lg:p-5">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-[42px] leading-none font-extrabold text-[#1a2029]">Customers</h1>
-          <div className="flex items-center gap-2">
+    <div className="p-3 sm:p-4 md:p-4 lg:p-5">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <h1 className="text-[28px] sm:text-[36px] lg:text-[44px] leading-none font-extrabold text-[#1a2029]">Customers</h1>
+          <div className="flex flex-wrap items-center gap-2">
             <SelectMenu
               value={tierFilter}
               onChange={(value) => {
@@ -235,7 +238,7 @@ export default function CustomersPage() {
             <button
               type="button"
               onClick={() => setIsCreateModalOpen(true)}
-              className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[13px] font-semibold text-[#1d2512]"
+              className="h-10 rounded-lg bg-[#d4ff00] px-3 sm:px-4 text-[13px] font-semibold text-[#1d2512] shrink-0"
             >
               + Add Customer
             </button>

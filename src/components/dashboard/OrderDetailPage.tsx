@@ -87,7 +87,7 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
 
   return (
     <div className="p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         {error ? (
           <div className="mb-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
             {error}{" "}
@@ -105,7 +105,7 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
               ← Back to Orders
             </Link>
             <div className="mt-1 flex items-center gap-2">
-              <h1 className="text-[42px] leading-none font-extrabold text-[#171d27]">
+              <h1 className="text-[28px] sm:text-[36px] lg:text-[42px] leading-none font-extrabold text-[#171d27]">
                 Order {order?.order_number ? `#${order.order_number}` : `#${id}`}
               </h1>
               <span className="rounded-full bg-[#ebf7bf] px-3 py-1 text-[13px] font-semibold text-[#4f6610]">

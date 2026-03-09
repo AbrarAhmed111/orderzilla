@@ -73,7 +73,7 @@ export default function EditUserPage({ id }: EditUserPageProps) {
     try {
       setIsSaving(true);
       await orderzillaApi.dashboard.users.update(id, {
-        body: { name, role, is_active: active },
+        body: { name, role: role as "ADMIN" | "MANAGER" | "VIEWER", is_active: active } as never,
       });
       toast.success("User updated.");
     } catch (err: unknown) {
@@ -135,7 +135,7 @@ export default function EditUserPage({ id }: EditUserPageProps) {
 
   return (
     <div className="p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         {error ? (
           <div className="mb-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
             {error}

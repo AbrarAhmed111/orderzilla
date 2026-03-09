@@ -80,14 +80,14 @@ export default function CreateCategoryPage() {
   };
 
   return (
-    <div className="p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <div className="flex items-center justify-between">
+    <div className="p-3 sm:p-4">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <Link href="/dashboard/categories" className="text-[13px] text-[#67707d]">
               ← Back to Categories
             </Link>
-            <h1 className="text-[42px] leading-none font-extrabold text-[#1a2029] mt-1">
+            <h1 className="text-[28px] sm:text-[36px] lg:text-[42px] leading-none font-extrabold text-[#1a2029] mt-1">
               Create Category
             </h1>
           </div>

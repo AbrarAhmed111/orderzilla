@@ -237,7 +237,7 @@ export default function ExtraGroupsPage() {
       await Promise.all(
         valid.map((body) =>
           orderzillaApi.dashboard.extras.create({
-            body,
+            body: { ...body, selection_type: body.selection_type as "SINGLE" | "MULTIPLE" } as never,
           }),
         ),
       );
@@ -252,11 +252,11 @@ export default function ExtraGroupsPage() {
   };
 
   return (
-    <div className="p-3 md:p-4 lg:p-5">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 md:px-5 md:py-5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-[42px] leading-none font-extrabold text-[#1a2029]">Extra Groups</h1>
-          <div className="flex items-center gap-2">
+    <div className="p-3 sm:p-4 md:p-4 lg:p-5">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 md:px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <h1 className="text-[28px] sm:text-[36px] lg:text-[44px] leading-none font-extrabold text-[#1a2029]">Extra Groups</h1>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setIsImportModalOpen(true)}
@@ -280,7 +280,7 @@ export default function ExtraGroupsPage() {
             />
             <Link
               href="/dashboard/extra-groups/create-extra-group"
-              className="h-9 rounded-lg bg-[#d4ff00] px-4 inline-flex items-center text-[12px] font-semibold text-[#1d2512]"
+              className="h-9 rounded-lg bg-[#d4ff00] px-3 sm:px-4 inline-flex items-center text-[12px] font-semibold text-[#1d2512] shrink-0"
             >
               + Add Extra Group
             </Link>

@@ -53,11 +53,8 @@ export default function CreateExtraGroupPage() {
         orderzillaApi.dashboard.extras.options.list(id),
       ]);
       setName(group?.name ?? "");
-      setDescription(
-        group?.translations?.de?.description ??
-          group?.translations?.en?.description ??
-          "",
-      );
+      const trans = group?.translations as Record<string, { description?: string }> | undefined;
+      setDescription(trans?.de?.description ?? trans?.en?.description ?? "");
       setSelectionType(group?.selection_type ?? "MULTIPLE");
       setIsRequired(group?.is_required ?? false);
       setMinSelections(group?.min_selections ?? 0);
@@ -123,10 +120,10 @@ export default function CreateExtraGroupPage() {
               price_add: opt.priceAdd || "0.00",
               sort_order: opt.sortOrder,
               translations: description
-                ? {
+                ? ({
                     de: { name: opt.name, description },
                     en: { name: opt.name, description },
-                  }
+                  } as never)
                 : undefined,
             },
           }),
@@ -143,10 +140,10 @@ export default function CreateExtraGroupPage() {
               price_add: opt.priceAdd || "0.00",
               sort_order: opt.sortOrder,
               translations: description
-                ? {
+                ? ({
                     de: { name: opt.name, description },
                     en: { name: opt.name, description },
-                  }
+                  } as never)
                 : undefined,
             },
           }),
@@ -180,21 +177,21 @@ export default function CreateExtraGroupPage() {
         is_required: isRequired,
         sort_order: Math.max(0, sortOrder),
         translations: description.trim()
-          ? {
+          ? ({
               de: { name: name.trim(), description: description.trim() },
               en: { name: name.trim(), description: description.trim() },
-            }
+            } as never)
           : undefined,
       };
 
       let id = groupId;
       if (!id) {
-        const created = await orderzillaApi.dashboard.extras.create({ body });
+        const created = await orderzillaApi.dashboard.extras.create({ body: body as never });
         id = created?.id ?? "";
         if (!id) throw new Error("Failed to create group id");
         setGroupId(id);
       } else {
-        await orderzillaApi.dashboard.extras.update(id, { body });
+        await orderzillaApi.dashboard.extras.update(id, { body: body as never });
       }
 
       await syncOptions(id);
@@ -239,14 +236,14 @@ export default function CreateExtraGroupPage() {
   }
 
   return (
-    <div className="p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <div className="flex items-center justify-between">
+    <div className="p-3 sm:p-4">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <Link href="/dashboard/extra-groups" className="text-[13px] text-[#67707d]">
               ← Back to Extra Groups
             </Link>
-            <h1 className="text-[44px] leading-none font-extrabold text-[#1a2029] mt-1">
+            <h1 className="text-[28px] sm:text-[36px] lg:text-[44px] leading-none font-extrabold text-[#1a2029] mt-1">
               {isEditMode ? "Edit Extra Group" : "Create Extra Group"}
             </h1>
           </div>
@@ -281,7 +278,7 @@ export default function CreateExtraGroupPage() {
           <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
             <section>
               <h2 className="text-[31px] font-bold text-[#1a212c]">Basic Information</h2>
-              <div className="mt-2 grid grid-cols-2 gap-3">
+              <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-[14px] font-semibold text-[#363f4c]">Group Name</label>
                   <ValidatedInput
@@ -312,7 +309,7 @@ export default function CreateExtraGroupPage() {
 
             <section className="mt-4 border-t border-[#eceff3] pt-3">
               <h2 className="text-[31px] font-bold text-[#1a212c]">Configuration</h2>
-              <div className="mt-3 grid grid-cols-2 gap-4">
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <p className="text-[14px] font-semibold text-[#363f4c]">Type</p>
                   <div className="mt-2 flex items-center gap-4 text-[15px] text-[#2f3743]">
@@ -361,7 +358,7 @@ export default function CreateExtraGroupPage() {
                 </div>
               </div>
 
-              <div className="mt-3 grid grid-cols-2 gap-3">
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-[14px] font-semibold text-[#363f4c]">Min selection limit</label>
                   <input

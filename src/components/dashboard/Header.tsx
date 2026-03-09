@@ -64,11 +64,11 @@ export default function Header() {
   };
 
   return (
-    <header className="sticky top-0 z-20 h-[68px] flex items-center justify-between px-6 border-b border-[#e6e7ea] bg-[#f7f8fa]">
-      <h2 className="text-[34px] leading-none font-extrabold text-[#1a1f27]">
+    <header className="sticky top-0 z-20 min-h-[56px] sm:h-[68px] flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-3 sm:px-6 py-3 sm:py-0 border-b border-[#e6e7ea] bg-[#f7f8fa]">
+      <h2 className="text-[24px] sm:text-[34px] leading-none font-extrabold text-[#1a1f27]">
         Dashboard
       </h2>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <SelectMenu
           value={selectedTimeline}
           onChange={(value) => updateQuery({ timeline: value })}
@@ -79,13 +79,13 @@ export default function Header() {
             { label: "This month", value: "thisMonth" },
             { label: "All time", value: "all" },
           ]}
-          className="min-w-[150px]"
+          className="min-w-[120px] sm:min-w-[150px]"
         />
         <SelectMenu
           value={selectedLocation}
           onChange={(value) => updateQuery({ location: value })}
           options={locationOptions}
-          className="min-w-[170px]"
+          className="min-w-[120px] sm:min-w-[170px]"
         />
       </div>
     </header>

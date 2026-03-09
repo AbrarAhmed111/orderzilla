@@ -273,7 +273,16 @@ export default function UsersPage() {
     if (!modifiableIds.length) return;
     const loadingToast = toast.loading("Updating users...");
     try {
-      await Promise.all(modifiableIds.map((id) => orderzillaApi.dashboard.users.update(id, { body: payload })));
+      await Promise.all(
+        modifiableIds.map((id) =>
+          orderzillaApi.dashboard.users.update(id, {
+            body: {
+              ...payload,
+              role: payload.role === "OWNER" ? undefined : (payload.role as "ADMIN" | "MANAGER" | "VIEWER"),
+            } as never,
+          }),
+        ),
+      );
       toast.success("Users updated.");
       setSelectedIds([]);
       await fetchUsers();
@@ -344,7 +353,9 @@ export default function UsersPage() {
     const role = roleOptionToApi(createRole);
     try {
       setIsCreateSubmitting(true);
-      await orderzillaApi.dashboard.users.create({ body: { name, email, password, role } });
+      await orderzillaApi.dashboard.users.create({
+        body: { name, email, password, role: role as "ADMIN" | "MANAGER" | "VIEWER" },
+      });
       toast.success("User created.");
       setIsCreateModalOpen(false);
       resetCreateForm();
@@ -415,7 +426,9 @@ export default function UsersPage() {
         const roleValue = (idx.role >= 0 ? (cols[idx.role] ?? "") : "").toUpperCase();
         const role: UserApiRole =
           roleValue === "ADMIN" ? "ADMIN" : roleValue === "VIEWER" ? "VIEWER" : "MANAGER";
-        await orderzillaApi.dashboard.users.create({ body: { name, email, password, role } });
+        await orderzillaApi.dashboard.users.create({
+          body: { name, email, password, role: role as "ADMIN" | "MANAGER" | "VIEWER" },
+        });
         created += 1;
       }
       toast.success(`Imported ${created} user(s).`);
@@ -429,15 +442,15 @@ export default function UsersPage() {
   };
 
   return (
-    <div className="p-3 md:p-4 lg:p-5 space-y-3">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 md:px-5 md:py-5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-[44px] leading-none font-extrabold text-[#1a2029]">Users</h1>
+    <div className="p-3 sm:p-4 md:p-4 lg:p-5 space-y-3">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 md:px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <h1 className="text-[28px] sm:text-[36px] lg:text-[44px] leading-none font-extrabold text-[#1a2029]">Users</h1>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setIsCreateModalOpen(true)}
-              className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512]"
+              className="h-9 rounded-lg bg-[#d4ff00] px-3 sm:px-4 text-[12px] font-semibold text-[#1d2512] shrink-0"
             >
               + Add User
             </button>

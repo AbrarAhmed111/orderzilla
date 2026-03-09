@@ -116,11 +116,9 @@ export default function EditProductPage() {
         ]);
 
       setName(product?.name ?? "");
+      const trans = product?.translations as Record<string, { description?: string }> | undefined;
       setDescription(
-        product?.description ??
-          product?.translations?.de?.description ??
-          product?.translations?.en?.description ??
-          "",
+        product?.description ?? trans?.de?.description ?? trans?.en?.description ?? "",
       );
       setSku(product?.sku ?? "");
       setCategoryId(product?.category_id ?? "");
@@ -304,20 +302,20 @@ export default function EditProductPage() {
   }
 
   return (
-    <div className="p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+    <div className="p-3 sm:p-4">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         {error ? (
           <div className="mb-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
             {error}
           </div>
         ) : null}
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <Link href="/dashboard/products" className="text-[13px] text-[#67707d]">
               ← Back to Products
             </Link>
-            <h1 className="mt-1 text-[42px] leading-none font-extrabold text-[#1a2029]">Edit Product</h1>
+            <h1 className="mt-1 text-[28px] sm:text-[36px] lg:text-[42px] leading-none font-extrabold text-[#1a2029]">Edit Product</h1>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -350,7 +348,7 @@ export default function EditProductPage() {
         <div className="mt-4 space-y-3">
           <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
             <h2 className="text-[30px] font-bold text-[#1a212c]">Basic Information</h2>
-            <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
               <ValidatedInput
                 value={name}
                 onChange={setName}

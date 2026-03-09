@@ -247,7 +247,7 @@ export default function OrdersPage() {
         );
         setTerminalOptions(
           terminals.map((terminal) => ({
-            label: terminal.name ?? terminal.code ?? "Unnamed terminal",
+            label: terminal.name ?? terminal.terminal_code ?? "Unnamed terminal",
             value: terminal.id ?? "",
           })),
         );
@@ -481,7 +481,7 @@ export default function OrdersPage() {
               date: formatDateTime(item.created_at),
               terminal: item.terminal_name ?? item.terminal_code ?? "-",
               items: 1,
-              type: item.mode === "TAKEAWAY" ? "Takeaway" : "Indoor",
+              type: (item.mode === "TAKEAWAY" ? "Takeaway" : "Indoor") as "Indoor" | "Takeaway",
               payment: normalizePaymentMethod(item.payment_method).label,
               total: item.total_gross ? `$${item.total_gross}` : "$0.00",
               status: statusToLabel[item.status ?? "PENDING"] ?? "Pending",
@@ -537,7 +537,7 @@ export default function OrdersPage() {
   };
 
   const handleNewOrder = () => {
-    router.push("/dashboard/endpoints-missing");
+    toast("New order feature coming soon.");
   };
 
   const deleteSelected = () => {
@@ -558,10 +558,10 @@ export default function OrdersPage() {
   };
 
   return (
-    <div className="p-3 md:p-4 lg:p-5">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 md:px-5 md:py-5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-[42px] leading-none font-extrabold text-[#1a2029]">Orders</h1>
+    <div className="p-3 sm:p-4 md:p-4 lg:p-5">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 md:px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <h1 className="text-[28px] sm:text-[36px] lg:text-[44px] leading-none font-extrabold text-[#1a2029]">Orders</h1>
           <div className="flex flex-wrap items-center gap-2">
             <div className="min-w-[150px]">
               <SelectMenu
@@ -603,7 +603,7 @@ export default function OrdersPage() {
             <button
               type="button"
               onClick={handleNewOrder}
-              className="h-9 rounded-lg bg-[#d4ff00] px-4 inline-flex items-center gap-2 text-[12px] font-semibold text-[#1d2512]"
+              className="h-9 rounded-lg bg-[#d4ff00] px-3 sm:px-4 inline-flex items-center gap-2 text-[12px] font-semibold text-[#1d2512] shrink-0"
             >
               <Plus size={13} />
               New Order
@@ -613,7 +613,7 @@ export default function OrdersPage() {
         {error ? (
           <div className="mt-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
             {error}{" "}
-            <button type="button" onClick={fetchOrders} className="font-semibold underline">
+            <button type="button" onClick={() => fetchOrders()} className="font-semibold underline">
               Retry
             </button>
           </div>

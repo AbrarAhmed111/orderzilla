@@ -1,14 +1,13 @@
 import TerminalDetailFunctionsPage from "@/components/dashboard/TerminalDetailFunctionsPage";
 
 type TerminalFunctionsRouteProps = {
-  params: {
-    id: string;
-  };
+  params: Promise<{ id: string }>;
 };
 
-export default function DashboardTerminalFunctionsRoute({
+export default async function DashboardTerminalFunctionsRoute({
   params,
 }: TerminalFunctionsRouteProps) {
-  return <TerminalDetailFunctionsPage id={params.id} />;
+  const { id } = await params;
+  return <TerminalDetailFunctionsPage id={id} />;
 }
 

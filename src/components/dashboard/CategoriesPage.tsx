@@ -207,13 +207,13 @@ export default function CategoriesPage() {
   };
 
   return (
-    <div className="p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <div className="flex items-center justify-between">
-          <h1 className="text-[44px] leading-none font-extrabold text-[#1a2029]">
+    <div className="p-3 sm:p-4">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <h1 className="text-[28px] sm:text-[36px] lg:text-[44px] leading-none font-extrabold text-[#1a2029]">
             Categories
           </h1>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {isSavingSort ? (
               <span className="text-[12px] font-semibold text-[#7a8291]">Saving order...</span>
             ) : null}
@@ -225,11 +225,11 @@ export default function CategoriesPage() {
                 setPage(1);
               }}
               options={locationOptions}
-              className="min-w-[150px]"
+              className="min-w-[120px] sm:min-w-[150px]"
             />
             <Link
               href="/categories/create-category"
-              className="h-10 rounded-lg bg-[#d4ff00] px-4 inline-flex items-center gap-2 text-[14px] font-semibold text-[#1d2512]"
+              className="h-10 rounded-lg bg-[#d4ff00] px-3 sm:px-4 inline-flex items-center gap-2 text-[13px] sm:text-[14px] font-semibold text-[#1d2512] shrink-0"
             >
               <Plus size={14} />
               Add Category
@@ -250,8 +250,8 @@ export default function CategoriesPage() {
             <TableSkeleton rows={6} columns={4} />
           </div>
         ) : (
-          <div className="mt-4 rounded-xl border border-[#e4e6ea] overflow-hidden">
-          <div className="grid grid-cols-[40px_1fr_260px_70px] items-center px-3 py-2 bg-[#f8f9fb] border-b border-[#e9ebef]">
+          <div className="mt-4 rounded-xl border border-[#e4e6ea] overflow-x-auto">
+          <div className="grid grid-cols-[40px_minmax(120px,1fr)_minmax(200px,260px)_70px] items-center gap-2 sm:gap-3 min-w-[520px] px-3 py-2 bg-[#f8f9fb] border-b border-[#e9ebef]">
             <span />
             <p className="text-[13px] font-semibold text-[#6f7785]">Category</p>
             <p className="text-[13px] font-semibold text-[#6f7785]">Visibility / Availability</p>
@@ -269,7 +269,7 @@ export default function CategoriesPage() {
                 await handleDropRow(category.id);
                 setDraggingId(null);
               }}
-              className={`grid grid-cols-[40px_1fr_260px_70px] items-center gap-2 px-3 py-3 ${
+              className={`grid grid-cols-[40px_minmax(120px,1fr)_minmax(200px,260px)_70px] items-center gap-2 sm:gap-3 min-w-[520px] px-3 py-3 ${
                 index !== paginatedRows.length - 1 ? "border-b border-[#edf0f4]" : ""
               } ${index === 0 ? "bg-[#f9fafc]" : "bg-white"} ${
                 draggingId === category.id ? "opacity-60" : ""
@@ -297,15 +297,15 @@ export default function CategoriesPage() {
                     />
                   )}
                 </div>
-                <div>
-                  <p className="text-[24px] leading-tight font-semibold text-[#1d2430]">
+                <div className="min-w-0">
+                  <p className="text-[18px] sm:text-[24px] leading-tight font-semibold text-[#1d2430] truncate">
                     {category.name}
                   </p>
                   <p className="text-[12px] text-[#7a8291]">{category.products} products</p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
                 <Toggle
                   active={category.active}
                   onToggle={async (next) => {

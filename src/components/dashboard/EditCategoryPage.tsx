@@ -36,11 +36,8 @@ export default function EditCategoryPage({ id }: EditCategoryPageProps) {
       const category = await orderzillaApi.dashboard.categories.byId(id);
 
       setName(category?.name ?? "");
-      setDescription(
-        category?.translations?.de?.description ??
-          category?.translations?.en?.description ??
-          "",
-      );
+      const trans = category?.translations as Record<string, { description?: string }> | undefined;
+      setDescription(trans?.de?.description ?? trans?.en?.description ?? "");
       setSortOrder(category?.sort_order ?? 0);
       setImageUrl(category?.image_url ?? "");
     } catch {
@@ -129,8 +126,8 @@ export default function EditCategoryPage({ id }: EditCategoryPageProps) {
   }
 
   return (
-    <div className="p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+    <div className="p-3 sm:p-4">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         {error ? (
           <div className="mb-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
             {error}{" "}
@@ -140,12 +137,12 @@ export default function EditCategoryPage({ id }: EditCategoryPageProps) {
           </div>
         ) : null}
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <Link href="/dashboard/categories" className="text-[13px] text-[#67707d]">
               ← Back to Categories
             </Link>
-            <h1 className="text-[42px] leading-none font-extrabold text-[#1a2029] mt-1">
+            <h1 className="text-[28px] sm:text-[36px] lg:text-[42px] leading-none font-extrabold text-[#1a2029] mt-1">
               Edit Category
             </h1>
           </div>

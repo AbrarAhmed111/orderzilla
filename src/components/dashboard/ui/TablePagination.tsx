@@ -24,7 +24,7 @@ export default function TablePagination({
   label = "items",
 }: TablePaginationProps) {
   return (
-    <div className="mt-4 rounded-xl border border-[#e5e7eb] bg-[#fafbfc] px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+    <div className="mt-4 rounded-xl border border-[#e5e7eb] bg-[#fafbfc] px-3 sm:px-4 py-3 flex flex-wrap items-center justify-between gap-3">
       <p className="text-[12px] text-[#6e7785]">
         {totalItems} {label}
       </p>

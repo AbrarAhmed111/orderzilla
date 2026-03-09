@@ -104,7 +104,7 @@ export default function TerminalDetailFunctionsPage({
       setIsSending(true);
       await orderzillaApi.dashboard.terminals.commands.create(id, {
         body: {
-          command,
+          command: command as "RELOAD_MENU" | "SHOW_MESSAGE" | "MAINTENANCE_MODE" | "CLEAR_MAINTENANCE",
           payload:
             command === "SHOW_MESSAGE"
               ? ({ message: message.trim() } as unknown as Record<string, never>)
@@ -130,7 +130,7 @@ export default function TerminalDetailFunctionsPage({
 
   return (
     <div className="p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-[14px] text-[#7a8291]">

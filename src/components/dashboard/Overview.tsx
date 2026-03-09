@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   Area,
@@ -197,27 +198,27 @@ export default function Overview() {
   }
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-3 sm:p-4 space-y-3 sm:space-y-4">
       {error ? (
         <div className="rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
           {error}
         </div>
       ) : null}
-      <section className="grid grid-cols-5 gap-3">
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
         {cards.length === 0 ? (
-          <article className="col-span-5 rounded-xl border border-[#e6e7ea] bg-white p-6 text-center text-[13px] text-[#717c8e]">
+          <article className="col-span-2 sm:col-span-3 lg:col-span-5 rounded-xl border border-[#e6e7ea] bg-white p-4 sm:p-6 text-center text-[13px] text-[#717c8e]">
             No KPI data available for selected filters.
           </article>
         ) : (
           cards.map((card, index) => (
             <article
               key={card.title}
-              className="rounded-xl border border-[#e6e7ea] bg-white p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
+              className="rounded-xl border border-[#e6e7ea] bg-white p-2.5 sm:p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
             >
-              <p className="text-[11px] font-semibold text-[#808794]">{card.title}</p>
+              <p className="text-[10px] sm:text-[11px] font-semibold text-[#808794] truncate">{card.title}</p>
               <p
-                className={`mt-1 leading-[1] font-extrabold tracking-tight text-[#161b22] ${
-                  index === 4 ? "text-[30px]" : "text-[38px]"
+                className={`mt-1 leading-[1] font-extrabold tracking-tight text-[#161b22] truncate ${
+                  index === 4 ? "text-[20px] sm:text-[26px] lg:text-[30px]" : "text-[24px] sm:text-[32px] lg:text-[38px]"
                 }`}
               >
                 {card.value}
@@ -234,10 +235,10 @@ export default function Overview() {
         )}
       </section>
 
-      <section className="grid grid-cols-[2fr_1fr] gap-3">
+      <section className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-3">
         <article className="rounded-xl border border-[#e6e7ea] bg-white p-3">
-          <h3 className="text-[22px] font-bold text-[#1b2028]">Daily Revenue Trend</h3>
-          <div className="h-[250px] mt-2">
+          <h3 className="text-[18px] sm:text-[22px] font-bold text-[#1b2028]">Daily Revenue Trend</h3>
+          <div className="h-[200px] sm:h-[250px] mt-2">
             {revenue.length === 0 ? (
               <div className="h-full flex items-center justify-center text-[13px] text-[#717c8e]">
                 No daily revenue data available.
@@ -269,8 +270,8 @@ export default function Overview() {
         </article>
 
         <article className="rounded-xl border border-[#e6e7ea] bg-white p-3">
-          <h3 className="text-[22px] font-bold text-[#1b2028]">Revenue by Terminal</h3>
-          <div className="h-[250px] mt-2">
+          <h3 className="text-[18px] sm:text-[22px] font-bold text-[#1b2028]">Revenue by Terminal</h3>
+          <div className="h-[200px] sm:h-[250px] mt-2">
             {terminalChart.length === 0 ? (
               <div className="h-full flex items-center justify-center text-[13px] text-[#717c8e]">
                 No terminal revenue data available.
@@ -290,17 +291,17 @@ export default function Overview() {
         </article>
       </section>
 
-      <section className="grid grid-cols-[1.1fr_1fr] gap-3">
+      <section className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-3">
         <article className="rounded-xl border border-[#e6e7ea] bg-white p-3">
-          <h3 className="text-[22px] font-bold text-[#1b2028]">Top Products</h3>
+          <h3 className="text-[18px] sm:text-[22px] font-bold text-[#1b2028]">Top Products</h3>
           <div className="mt-3 space-y-3">
             {products.length === 0 ? (
               <p className="py-6 text-center text-[13px] text-[#717c8e]">No top products data available.</p>
             ) : (
               products.map((product, index) => (
                 <div key={`${product.name}-${product.amount}-${index}`}>
-                  <div className="flex items-center justify-between text-[17px]">
-                    <span className="font-semibold text-[#222a35]">{product.name}</span>
+                  <div className="flex items-center justify-between text-[14px] sm:text-[17px] gap-2">
+                    <span className="font-semibold text-[#222a35] truncate min-w-0">{product.name}</span>
                     <span className="font-bold text-[#222a35]">{product.amount}</span>
                   </div>
                   <div className="mt-1 h-2 rounded-full bg-[#e8eaef]">
@@ -316,14 +317,17 @@ export default function Overview() {
         </article>
 
         <article className="rounded-xl border border-[#e6e7ea] bg-white p-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-[22px] font-bold text-[#1b2028]">Recent Orders</h3>
-            <button type="button" className="text-[16px] font-semibold text-[#4d5560]">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-[18px] sm:text-[22px] font-bold text-[#1b2028]">Recent Orders</h3>
+            <Link
+              href="/dashboard/orders"
+              className="text-[14px] sm:text-[16px] font-semibold text-[#4d5560] hover:text-[#2f3743] hover:underline shrink-0"
+            >
               View all →
-            </button>
+            </Link>
           </div>
-          <div className="mt-2 overflow-x-auto">
-            <table className="w-full text-left">
+          <div className="mt-2 overflow-x-auto -mx-1 px-1">
+            <table className="w-full text-left min-w-[320px]">
               <thead>
                 <tr className="text-[13px] text-[#7b8492]">
                   <th className="py-1 font-semibold">Order ID</th>
@@ -341,7 +345,7 @@ export default function Overview() {
                   </tr>
                 ) : (
                   orders.map((order) => (
-                    <tr key={order.id} className="border-t border-[#eceef2] text-[16px]">
+                    <tr key={order.id} className="border-t border-[#eceef2] text-[14px] sm:text-[16px]">
                       <td className="py-2 font-semibold text-[#242b36]">{order.id}</td>
                       <td className="py-2 text-[#4f5867]">{order.items}</td>
                       <td className="py-2 font-bold text-[#242b36]">{order.total}</td>

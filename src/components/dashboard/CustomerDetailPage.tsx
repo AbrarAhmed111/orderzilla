@@ -133,7 +133,7 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
 
   return (
     <div className="p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         {error ? (
           <div className="mb-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
             {error}{" "}
@@ -164,10 +164,10 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-[2fr_1fr] gap-3">
+        <div className="mt-4 grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-3">
           <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
             <h2 className="text-[31px] font-bold text-[#1a212c]">Customer Info</h2>
-            <div className="mt-3 grid grid-cols-2 gap-4">
+            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <InfoPair label="Name" value={customerName} />
                 <InfoPair label="Email" value={customer?.email ?? "-"} />
@@ -218,7 +218,7 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
 
           <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
             <h2 className="text-[31px] font-bold text-[#1a212c]">Customer Summary</h2>
-            <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <p className="text-[13px] text-[#6e7785]">Total Points Earned</p>
                   <p className="text-[31px] leading-tight font-bold text-[#1a2029]">
@@ -241,7 +241,7 @@ export default function CustomerDetailPage({ id }: CustomerDetailPageProps) {
           </article>
         </div>
 
-        <div className="mt-3 grid grid-cols-[2fr_1fr] gap-3">
+        <div className="mt-3 grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-3">
           <article className="rounded-xl border border-[#e4e6ea] overflow-hidden">
             <div className="px-3 py-2 border-b border-[#e9ebef] bg-white flex items-center justify-between">
               <h2 className="text-[31px] font-bold text-[#1a212c]">Transaction History</h2>

@@ -14,12 +14,6 @@ const OAUTH_REDIRECT_URI =
 const OAUTH_SCOPE =
   "dashboard:read dashboard:write dashboard:terminals dashboard:loyalty dashboard:admin";
 
-function maskValue(value?: string | null, keep = 6) {
-  if (!value) return "(empty)";
-  if (value.length <= keep * 2) return `${value.slice(0, 2)}***${value.slice(-2)}`;
-  return `${value.slice(0, keep)}...${value.slice(-keep)}`;
-}
-
 function toBase64Url(input: ArrayBuffer) {
   const bytes = new Uint8Array(input);
   let binary = "";
@@ -68,14 +62,6 @@ export default function LoginPage() {
 
       const { codeVerifier, codeChallenge } = await createPkce();
       const oauthState = crypto.randomUUID();
-      console.log("[auth] Starting authorize request", {
-        email: normalizedEmail,
-        client_id: OAUTH_CLIENT_ID,
-        redirect_uri: OAUTH_REDIRECT_URI,
-        scope: OAUTH_SCOPE,
-        state: oauthState,
-        code_challenge: maskValue(codeChallenge),
-      });
 
       const auth = await orderzillaApi.oauth.authorize({
         body: {
@@ -89,30 +75,17 @@ export default function LoginPage() {
           scope: OAUTH_SCOPE,
         },
       });
-      console.log("[auth] Authorize response", auth);
 
       let authCode = auth?.code;
       const redirectUrl = (auth as { redirect?: string } | null)?.redirect;
       if (!authCode && redirectUrl) {
-        console.log("[auth] Authorize returned redirect URL", {
-          redirect: redirectUrl,
-        });
         const parsed = new URL(redirectUrl);
         authCode = parsed.searchParams.get("code") ?? undefined;
       }
 
       if (!authCode) {
-        console.error("[auth] No authorization code found", {
-          authorizeResponse: auth,
-          redirectUrl,
-        });
         throw new Error("No authorization code returned");
       }
-
-      console.log("[auth] Extracted authorization code", {
-        code: maskValue(authCode),
-        code_verifier: maskValue(codeVerifier),
-      });
 
       const token = await orderzillaApi.oauth.token({
         body: {
@@ -122,13 +95,6 @@ export default function LoginPage() {
           code: authCode,
           code_verifier: codeVerifier,
         },
-      });
-      console.log("[auth] Token response", {
-        access_token: maskValue(token?.access_token),
-        refresh_token: maskValue(token?.refresh_token),
-        token_type: token?.token_type,
-        expires_in: token?.expires_in,
-        scope: token?.scope,
       });
 
       if (!token?.access_token) {

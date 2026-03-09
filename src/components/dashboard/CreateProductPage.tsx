@@ -181,13 +181,13 @@ export default function CreateProductPage() {
 
   return (
     <div className="p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         <div className="flex items-center justify-between">
           <div>
             <Link href="/dashboard/products" className="text-[13px] text-[#67707d]">
               ← Back to Products
             </Link>
-            <h1 className="mt-1 text-[42px] leading-none font-extrabold text-[#1a2029]">Create Product</h1>
+            <h1 className="mt-1 text-[28px] sm:text-[36px] lg:text-[42px] leading-none font-extrabold text-[#1a2029]">Create Product</h1>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -219,7 +219,7 @@ export default function CreateProductPage() {
         <div className="mt-4 space-y-3">
           <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
             <h2 className="text-[30px] font-bold text-[#1a212c]">Basic Information</h2>
-            <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
               <ValidatedInput
                 value={name}
                 onChange={setName}

@@ -22,12 +22,17 @@
   --foreground: var(--oz-dark);
 }
 
-body{
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
   font-family: "Inter", sans-serif;
   font-optical-sizing: auto;
   background-color: var(--oz-surface);
   color: var(--oz-dark);
   line-height: 1.35;
+  overflow-x: hidden;
 }
 
 /* Palette mapping for existing Tailwind arbitrary classes */
@@ -87,8 +92,10 @@ button {
     transform 140ms ease, color 180ms ease;
 }
 
-button:hover {
-  transform: translateY(-1px);
+@media (hover: hover) {
+  button:hover {
+    transform: translateY(-1px);
+  }
 }
 
 button:active {
@@ -172,6 +179,30 @@ h3.text-\[31px\] {
 
   .text-\[26px\] {
     font-size: 18px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  h1.text-\[44px\],
+  h1.text-\[42px\] {
+    font-size: 24px !important;
+  }
+
+  h2.text-\[34px\] {
+    font-size: 20px !important;
+  }
+
+  h2.text-\[31px\],
+  h3.text-\[31px\] {
+    font-size: 18px !important;
+  }
+
+  .text-\[30px\] {
+    font-size: 18px !important;
+  }
+
+  .text-\[36px\] {
+    font-size: 24px !important;
   }
 }
 
