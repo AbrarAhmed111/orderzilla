@@ -481,7 +481,7 @@ export default function UsersPage() {
             last_name: last,
             email,
             password,
-            role: role === "OWNER" ? "MANAGER" : (role as "ADMIN" | "MANAGER" | "VIEWER"),
+            role,
           },
         });
         created += 1;
