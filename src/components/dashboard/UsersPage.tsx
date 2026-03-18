@@ -14,6 +14,14 @@ import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api/orderzilla-api";
 import type { components } from "@/types/orderzilla-openapi";
 
+const EMPTY_VALUE = "—";
+
+function toDisplayValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
+
 type ApiUser = components["schemas"]["User"];
 type UserApiRole = "OWNER" | "ADMIN" | "MANAGER" | "VIEWER";
 
@@ -24,6 +32,7 @@ type UserRow = {
   role: UserApiRole;
   lastLogin: string;
   active: boolean;
+  avatarUrl: string | null;
 };
 
 type UserTableResponse = {
@@ -87,6 +96,21 @@ function InitialAvatar({ name }: { name: string }) {
     <div className="h-9 w-9 rounded-full bg-[#ffd7b1] flex items-center justify-center text-[12px] font-semibold text-[#7a4f21]">
       {initials}
     </div>
+  );
+}
+
+function UserAvatar({ avatarUrl, name }: { avatarUrl: string | null; name: string }) {
+  const [imgError, setImgError] = useState(false);
+  const showImage = avatarUrl && avatarUrl.trim() !== "" && !imgError;
+  return showImage ? (
+    <img
+      src={avatarUrl}
+      alt={name}
+      className="h-9 w-9 rounded-full object-cover bg-[#f0f1f3]"
+      onError={() => setImgError(true)}
+    />
+  ) : (
+    <InitialAvatar name={name} />
   );
 }
 
@@ -233,14 +257,20 @@ export default function UsersPage() {
       const data = (await response.json()) as UserTableResponse;
       const users = (data.users ?? []) as ApiUser[];
       setRows(
-        users.map((user) => ({
-          id: user.id ?? crypto.randomUUID(),
-          name: user.name ?? "Unnamed user",
-          email: user.email ?? "-",
-          role: (user.role as UserApiRole) ?? "VIEWER",
-          lastLogin: user.created_at ? new Date(user.created_at).toLocaleString() : "-",
-          active: user.is_active ?? true,
-        })),
+        users.map((user) => {
+          const u = user as ApiUser & { last_login_at?: string; avatar_url?: string | null };
+          const loginAt = u.last_login_at ?? user.created_at;
+          const avatarUrl = typeof u.avatar_url === "string" && u.avatar_url.trim() ? u.avatar_url : null;
+          return {
+            id: toDisplayValue(user.id, "") || crypto.randomUUID(),
+            name: toDisplayValue(user.name, EMPTY_VALUE),
+            email: toDisplayValue(user.email, EMPTY_VALUE),
+            role: (user.role as UserApiRole) ?? "VIEWER",
+            lastLogin: loginAt ? new Date(loginAt).toLocaleString() : EMPTY_VALUE,
+            active: user.is_active ?? true,
+            avatarUrl,
+          };
+        }),
       );
       setTotalItems(data.pagination?.total_items ?? users.length);
       setTotalPages(data.pagination?.total_pages ?? 1);
@@ -277,9 +307,9 @@ export default function UsersPage() {
         modifiableIds.map((id) =>
           orderzillaApi.dashboard.users.update(id, {
             body: {
-              ...payload,
+              is_active: payload.is_active,
               role: payload.role === "OWNER" ? undefined : (payload.role as "ADMIN" | "MANAGER" | "VIEWER"),
-            } as never,
+            },
           }),
         ),
       );
@@ -345,16 +375,29 @@ export default function UsersPage() {
   ]);
   const isResetPasswordFormValid = !resetPasswordError;
 
+  const splitName = (name: string): { first: string; last: string } => {
+    const parts = name.trim().split(/\s+/);
+    if (parts.length === 0) return { first: "", last: "" };
+    if (parts.length === 1) return { first: parts[0], last: "" };
+    return { first: parts[0], last: parts.slice(1).join(" ") };
+  };
+
   const handleCreateUser = async () => {
     if (!isCreateUserFormValid) return;
-    const name = createName.trim();
+    const { first, last } = splitName(createName);
     const email = createEmail.trim();
     const password = createPassword;
     const role = roleOptionToApi(createRole);
     try {
       setIsCreateSubmitting(true);
       await orderzillaApi.dashboard.users.create({
-        body: { name, email, password, role: role as "ADMIN" | "MANAGER" | "VIEWER" },
+        body: {
+          first_name: first,
+          last_name: last,
+          email,
+          password,
+          role: role === "OWNER" ? "MANAGER" : (role as "ADMIN" | "MANAGER" | "VIEWER"),
+        },
       });
       toast.success("User created.");
       setIsCreateModalOpen(false);
@@ -426,8 +469,20 @@ export default function UsersPage() {
         const roleValue = (idx.role >= 0 ? (cols[idx.role] ?? "") : "").toUpperCase();
         const role: UserApiRole =
           roleValue === "ADMIN" ? "ADMIN" : roleValue === "VIEWER" ? "VIEWER" : "MANAGER";
+        const { first, last } = (() => {
+          const parts = name.trim().split(/\s+/);
+          if (parts.length === 0) return { first: "", last: "" };
+          if (parts.length === 1) return { first: parts[0], last: "" };
+          return { first: parts[0], last: parts.slice(1).join(" ") };
+        })();
         await orderzillaApi.dashboard.users.create({
-          body: { name, email, password, role: role as "ADMIN" | "MANAGER" | "VIEWER" },
+          body: {
+            first_name: first,
+            last_name: last,
+            email,
+            password,
+            role: role === "OWNER" ? "MANAGER" : (role as "ADMIN" | "MANAGER" | "VIEWER"),
+          },
         });
         created += 1;
       }
@@ -447,13 +502,12 @@ export default function UsersPage() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <h1 className="text-[28px] sm:text-[36px] lg:text-[44px] leading-none font-extrabold text-[#1a2029]">Users</h1>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setIsCreateModalOpen(true)}
-              className="h-9 rounded-lg bg-[#d4ff00] px-3 sm:px-4 text-[12px] font-semibold text-[#1d2512] shrink-0"
+            <Link
+              href="/dashboard/users/create-user"
+              className="h-9 rounded-lg bg-[#d4ff00] px-3 sm:px-4 text-[12px] font-semibold text-[#1d2512] shrink-0 inline-flex items-center"
             >
               + Add User
-            </button>
+            </Link>
             <button
               type="button"
               onClick={() => setIsImportModalOpen(true)}
@@ -616,7 +670,7 @@ export default function UsersPage() {
                     />
                   </td>
                   <td className="px-2 py-3">
-                    <InitialAvatar name={user.name} />
+                    <UserAvatar avatarUrl={user.avatarUrl} name={user.name} />
                   </td>
                   <td className="px-2 py-3 font-semibold text-[#222a35]">
                     <Link

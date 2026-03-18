@@ -7,6 +7,11 @@ type RootLayoutProps = {
   children: ReactNode;
 };
 
+export const metadata = {
+  title: "Orderzilla",
+  description: "Orderzilla Dashboard",
+};
+
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <Providers>

@@ -9,10 +9,19 @@ import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
 import TablePagination from "@/components/dashboard/ui/TablePagination";
+import RowActionMenu from "@/components/dashboard/ui/RowActionMenu";
 import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
 import { validateField } from "@/lib/validation";
 import { orderzillaApi } from "@/lib/api/orderzilla-api";
 import type { components } from "@/types/orderzilla-openapi";
+
+const EMPTY_VALUE = "—";
+
+function toDisplayValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
 
 type ApiCustomer = components["schemas"]["LoyaltyCustomer"];
 
@@ -23,7 +32,7 @@ type CustomerRow = {
   phone: string;
   tier: string;
   points: number;
-  orders: number;
+  orders: number | null;
   spend: string;
   status: "Active" | "Inactive";
 };
@@ -39,7 +48,7 @@ const TIER_STYLES: Record<string, { bg: string; text: string }> = {
 function TierBadge({ tier }: { tier: string }) {
   const upper = (tier ?? "").toUpperCase();
   const style = TIER_STYLES[upper] ?? TIER_STYLES.STANDARD;
-  const label = upper ? tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase() : "—";
+  const label = upper ? tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase() : EMPTY_VALUE;
   return (
     <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${style.bg} ${style.text}`}>
       {label}
@@ -50,6 +59,8 @@ function TierBadge({ tier }: { tier: string }) {
 export default function CustomersPage() {
   const router = useRouter();
   const pathname = usePathname();
+  const [deleteModalCustomer, setDeleteModalCustomer] = useState<CustomerRow | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const searchParams = useSearchParams();
 
   const [rows, setRows] = useState<CustomerRow[]>([]);
@@ -117,14 +128,14 @@ export default function CustomersPage() {
       const customers = (response?.customers ?? []) as ApiCustomer[];
       setRows(
         customers.map((customer) => ({
-          id: customer.id ?? crypto.randomUUID(),
-          name: `${customer.first_name ?? ""} ${customer.last_name ?? ""}`.trim() || "Unknown",
-          email: customer.email ?? "-",
-          phone: customer.phone ?? "-",
+          id: toDisplayValue(customer.id, "") || crypto.randomUUID(),
+          name: `${toDisplayValue(customer.first_name, "")} ${toDisplayValue(customer.last_name, "")}`.trim() || EMPTY_VALUE,
+          email: toDisplayValue(customer.email, EMPTY_VALUE),
+          phone: toDisplayValue(customer.phone, EMPTY_VALUE),
           tier: customer.tier ?? "STANDARD",
-          points: customer.points_balance ?? 0,
-          orders: 0,
-          spend: customer.total_spent ? `$${customer.total_spent}` : "$0.00",
+          points: typeof customer.points_balance === "number" ? customer.points_balance : 0,
+          orders: typeof (customer as { order_count?: number }).order_count === "number" ? (customer as { order_count: number }).order_count : null,
+          spend: customer.total_spent != null ? `$${customer.total_spent}` : EMPTY_VALUE,
           status: customer.is_active ? "Active" : "Inactive",
         })),
       );
@@ -211,6 +222,21 @@ export default function CustomersPage() {
       toast.error("Failed to update customer status.");
     } finally {
       setIsUpdatingStatus(false);
+    }
+  };
+
+  const confirmDeleteCustomer = async () => {
+    if (!deleteModalCustomer) return;
+    try {
+      setIsDeleting(true);
+      await orderzillaApi.dashboard.loyalty.customers.remove(deleteModalCustomer.id);
+      toast.success("Customer deleted.");
+      setDeleteModalCustomer(null);
+      await fetchCustomers();
+    } catch {
+      toast.error("Failed to delete customer.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -310,7 +336,7 @@ export default function CustomersPage() {
                     <TierBadge tier={customer.tier} />
                   </td>
                   <td className="px-2 py-3 font-semibold text-[#222a35]">{customer.points}</td>
-                  <td className="px-2 py-3 text-[#3e4653]">{customer.orders}</td>
+                  <td className="px-2 py-3 text-[#3e4653]">{customer.orders ?? EMPTY_VALUE}</td>
                   <td className="px-2 py-3 text-[#3e4653]">{customer.spend}</td>
                   <td className="px-2 py-3">
                     <span
@@ -334,12 +360,23 @@ export default function CustomersPage() {
                     </button>
                   </td>
                   <td className="px-3 py-3 text-right">
-                    <Link
-                      href={`/dashboard/customers/${customer.id}`}
-                      className="text-[12px] font-semibold text-[#3f4653] hover:underline"
-                    >
-                      View
-                    </Link>
+                    <div className="flex items-center justify-end gap-2">
+                      <Link
+                        href={`/dashboard/customers/${customer.id}`}
+                        className="text-[12px] font-semibold text-[#3f4653] hover:underline"
+                      >
+                        View
+                      </Link>
+                      <RowActionMenu
+                        actions={[
+                          {
+                            label: "Delete customer",
+                            danger: true,
+                            onClick: () => setDeleteModalCustomer(customer),
+                          },
+                        ]}
+                      />
+                    </div>
                   </td>
                 </tr>
                 ))
@@ -449,6 +486,35 @@ export default function CustomersPage() {
                 className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
               >
                 {isCreateSubmitting ? "Creating..." : "Create Customer"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {deleteModalCustomer ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[520px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Delete Customer</h2>
+            <p className="mt-2 text-[13px] text-[#6e7785]">
+              Are you sure you want to delete {deleteModalCustomer.name}? This action cannot be undone.
+            </p>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setDeleteModalCustomer(null)}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={confirmDeleteCustomer}
+                className="h-9 rounded-lg bg-[#ef4a4c] px-4 text-[12px] font-semibold text-white disabled:opacity-50"
+              >
+                {isDeleting ? "Deleting..." : "Delete"}
               </button>
             </div>
           </div>

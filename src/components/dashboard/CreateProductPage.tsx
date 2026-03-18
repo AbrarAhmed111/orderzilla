@@ -11,6 +11,14 @@ import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
 import { validateField } from "@/lib/validation";
 import type { components } from "@/types/orderzilla-openapi";
 
+const EMPTY_VALUE = "—";
+
+function toDisplayValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
+
 type ApiCategory = components["schemas"]["Category"];
 type ApiLocation = components["schemas"]["Location"];
 type ApiTerminal = components["schemas"]["Terminal"];
@@ -43,11 +51,16 @@ export default function CreateProductPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [name, setName] = useState("");
+  const [internalName, setInternalName] = useState("");
   const [description, setDescription] = useState("");
   const [sku, setSku] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [taxRate, setTaxRate] = useState<number | "">(8.1);
   const [sortOrder, setSortOrder] = useState<number | "">(0);
+  const [visibleInPos, setVisibleInPos] = useState(true);
+  const [featured, setFeatured] = useState(false);
+  const [colorTag, setColorTag] = useState("");
+  const [productType, setProductType] = useState<"standard" | "variant" | "combo">("standard");
   const [prices, setPrices] = useState<PriceDraft[]>([createPriceDraft()]);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState("");
@@ -94,11 +107,16 @@ export default function CreateProductPage() {
 
   const resetForm = () => {
     setName("");
+    setInternalName("");
     setDescription("");
     setSku("");
     setCategoryId("");
     setTaxRate(8.1);
     setSortOrder(0);
+    setVisibleInPos(true);
+    setFeatured(false);
+    setColorTag("");
+    setProductType("standard");
     setPrices([createPriceDraft()]);
     setSelectedExtraGroupIds([]);
     setImageFile(null);
@@ -126,17 +144,16 @@ export default function CreateProductPage() {
       const created = await orderzillaApi.dashboard.products.create({
         body: {
           name: name.trim(),
+          internal_name: internalName.trim() || undefined,
           description: description.trim() || undefined,
           sku: sku.trim() || undefined,
           category_id: categoryId || undefined,
           tax_rate: taxRate === "" ? undefined : Number(taxRate),
           sort_order: sortOrder === "" ? undefined : Number(sortOrder),
-          translations: description.trim()
-            ? {
-                de: { name: name.trim(), description: description.trim() },
-                en: { name: name.trim(), description: description.trim() },
-              }
-            : undefined,
+          visible_in_pos: visibleInPos,
+          featured,
+          color_tag: colorTag.trim() || undefined,
+          product_type: productType,
           prices: validPrices.map((price) => ({
             mode: price.mode,
             price: price.price.trim(),
@@ -146,7 +163,7 @@ export default function CreateProductPage() {
             valid_from: price.valid_from || null,
             valid_until: price.valid_until || null,
           })),
-        } as never,
+        },
       });
 
       if (created?.id && selectedExtraGroupIds.length > 0) {
@@ -232,6 +249,12 @@ export default function CreateProductPage() {
               />
               <input
                 className="h-10 rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none"
+                value={internalName}
+                onChange={(e) => setInternalName(e.target.value)}
+                placeholder="Internal name (e.g. CB-Classic)"
+              />
+              <input
+                className="h-10 rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none"
                 value={sku}
                 onChange={(e) => setSku(e.target.value)}
                 placeholder="SKU"
@@ -244,7 +267,7 @@ export default function CreateProductPage() {
                   ...categories
                     .filter((category) => Boolean(category.id))
                     .map((category) => ({
-                      label: category.name ?? "Unnamed category",
+                      label: toDisplayValue(category.name, EMPTY_VALUE),
                       value: category.id ?? "",
                     })),
                 ]}
@@ -264,6 +287,48 @@ export default function CreateProductPage() {
                 onChange={(e) => setSortOrder(e.target.value === "" ? "" : Number(e.target.value))}
                 placeholder="Sort order"
               />
+              <div className="col-span-2 flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={visibleInPos}
+                    onChange={(e) => setVisibleInPos(e.target.checked)}
+                    className="h-4 w-4 rounded border-[#cfd5de]"
+                  />
+                  <span className="text-[14px] font-semibold text-[#363f4c]">Visible in POS</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={featured}
+                    onChange={(e) => setFeatured(e.target.checked)}
+                    className="h-4 w-4 rounded border-[#cfd5de]"
+                  />
+                  <span className="text-[14px] font-semibold text-[#363f4c]">Featured</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <label className="text-[14px] font-semibold text-[#363f4c]">Color tag</label>
+                  <input
+                    type="text"
+                    className="h-9 w-24 rounded-lg border border-[#dfe3e8] px-2 text-[13px] outline-none"
+                    value={colorTag}
+                    onChange={(e) => setColorTag(e.target.value)}
+                    placeholder="#FF5733"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-[14px] font-semibold text-[#363f4c]">Product type</label>
+                  <SelectMenu
+                    value={productType}
+                    onChange={(v) => setProductType(v as "standard" | "variant" | "combo")}
+                    options={[
+                      { label: "Standard", value: "standard" },
+                      { label: "Variant", value: "variant" },
+                      { label: "Combo / Meal", value: "combo" },
+                    ]}
+                  />
+                </div>
+              </div>
             </div>
             <textarea
               className="mt-3 w-full rounded-lg border border-[#dfe3e8] px-3 py-2 text-[14px] outline-none"
@@ -298,7 +363,7 @@ export default function CreateProductPage() {
                           )
                         }
                       />
-                      <span>{group.name ?? "Unnamed group"}</span>
+                      <span>{toDisplayValue(group.name, EMPTY_VALUE)}</span>
                     </label>
                   );
                 })}
@@ -346,7 +411,7 @@ export default function CreateProductPage() {
                         ...locations
                           .filter((location) => Boolean(location.id))
                           .map((location) => ({
-                            label: location.name ?? "Unnamed location",
+                            label: toDisplayValue(location.name, EMPTY_VALUE),
                             value: location.id ?? "",
                           })),
                       ]}
@@ -363,7 +428,7 @@ export default function CreateProductPage() {
                             return terminal.location_id === price.location_id;
                           })
                           .map((terminal) => ({
-                            label: `${terminal.name ?? "Unnamed"} (${terminal.terminal_code ?? "N/A"})`,
+                            label: `${toDisplayValue(terminal.name, EMPTY_VALUE)} (${toDisplayValue(terminal.terminal_code, EMPTY_VALUE)})`,
                             value: terminal.id ?? "",
                           })),
                       ]}

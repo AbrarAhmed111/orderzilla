@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertCircle,
   ChevronDown,
   Home,
   Layers,
@@ -72,6 +73,7 @@ const sections: NavSection[] = [
     items: [
       { label: "Users", icon: UserCircle2, href: "/dashboard/users" },
       { label: "Settings", icon: Settings, href: "/dashboard/settings" },
+      // { label: "Missing Endpoints", icon: AlertCircle, href: "/dashboard/missing-endpoints" },
     ],
   },
 ];

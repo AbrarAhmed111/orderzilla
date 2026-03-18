@@ -4,6 +4,7 @@ type LocationRecord = {
   id?: string;
   name?: string;
   address?: string | null;
+  zip?: string | null;
   city?: string | null;
   country?: string;
   timezone?: string;
@@ -21,7 +22,8 @@ async function fetchProxyJson<T>(
   path: string,
   query?: URLSearchParams,
 ): Promise<T> {
-  const url = `${request.nextUrl.origin}/api/proxy${path}${query ? `?${query.toString()}` : ""}`;
+  const qs = query?.toString();
+  const url = `${request.nextUrl.origin}/api/proxy${path}${qs ? `?${qs}` : ""}`;
   const cookieToken = request.cookies.get("oz_access_token")?.value;
   const authHeader =
     request.headers.get("authorization") ??
@@ -41,6 +43,16 @@ async function fetchProxyJson<T>(
   return (await response.json()) as T;
 }
 
+type LocationsResponse = {
+  locations?: LocationRecord[];
+  pagination?: {
+    current_page?: number;
+    total_pages?: number;
+    total_items?: number;
+    items_per_page?: number;
+  };
+};
+
 export async function GET(request: NextRequest) {
   try {
     const sp = request.nextUrl.searchParams;
@@ -49,9 +61,20 @@ export async function GET(request: NextRequest) {
     const status = sp.get("status") ?? "all";
     const search = (sp.get("search") ?? "").trim().toLowerCase();
 
-    const response = await fetchProxyJson<{ locations?: LocationRecord[] }>(
+    const useFilters = status !== "all" || search !== "";
+    const query = new URLSearchParams();
+    if (useFilters) {
+      query.set("page", "1");
+      query.set("limit", "500");
+    } else {
+      query.set("page", String(page));
+      query.set("limit", String(limit));
+    }
+
+    const response = await fetchProxyJson<LocationsResponse>(
       request,
       "/v1/dashboard/locations",
+      query,
     );
     let rows = response.locations ?? [];
 
@@ -63,14 +86,20 @@ export async function GET(request: NextRequest) {
         const name = (location.name ?? "").toLowerCase();
         const city = (location.city ?? "").toLowerCase();
         const country = (location.country ?? "").toLowerCase();
-        return name.includes(search) || city.includes(search) || country.includes(search);
+        const zip = (location.zip ?? "").toLowerCase();
+        return name.includes(search) || city.includes(search) || country.includes(search) || zip.includes(search);
       });
     }
 
-    const totalItems = rows.length;
-    const totalPages = Math.max(1, Math.ceil(totalItems / limit));
-    const start = (page - 1) * limit;
-    const paged = rows.slice(start, start + limit);
+    const useBackendPagination = !useFilters && response.pagination;
+    const totalItems = useBackendPagination
+      ? (response.pagination?.total_items ?? rows.length)
+      : rows.length;
+    const totalPages = useBackendPagination
+      ? Math.max(1, response.pagination?.total_pages ?? 1)
+      : Math.max(1, Math.ceil(totalItems / limit));
+    const start = useBackendPagination ? 0 : (page - 1) * limit;
+    const paged = useBackendPagination ? rows : rows.slice(start, start + limit);
 
     return NextResponse.json({
       locations: paged,

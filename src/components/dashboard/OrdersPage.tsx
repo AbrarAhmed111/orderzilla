@@ -18,26 +18,27 @@ type UIRow = {
   id: string;
   date: string;
   terminal: string;
-  items: number;
+  items: number | null;
   type: "Indoor" | "Takeaway";
   payment: string;
   total: string;
-  status: "Pending" | "Preparing" | "Ready" | "Completed" | "Cancelled";
+  status: "Pending" | "Confirmed" | "Preparing" | "Ready" | "Completed" | "Cancelled";
 };
 
 const fallbackOrders: UIRow[] = [];
 
 const statusToLabel: Record<string, UIRow["status"]> = {
   PENDING: "Pending",
-  CONFIRMED: "Pending",
+  CONFIRMED: "Confirmed",
   PREPARING: "Preparing",
   READY: "Ready",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
 };
 
-const labelToApiStatus: Record<UIRow["status"], "PENDING" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED"> = {
+const labelToApiStatus: Record<UIRow["status"], "PENDING" | "CONFIRMED" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED"> = {
   Pending: "PENDING",
+  Confirmed: "CONFIRMED",
   Preparing: "PREPARING",
   Ready: "READY",
   Completed: "COMPLETED",
@@ -46,10 +47,11 @@ const labelToApiStatus: Record<UIRow["status"], "PENDING" | "PREPARING" | "READY
 
 const tabToApiStatus: Record<
   string,
-  "PENDING" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED" | undefined
+  "PENDING" | "CONFIRMED" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED" | undefined
 > = {
   "All Orders": undefined,
   Pending: "PENDING",
+  Confirmed: "CONFIRMED",
   Preparing: "PREPARING",
   Ready: "READY",
   Completed: "COMPLETED",
@@ -75,14 +77,23 @@ function statusClass(status: string) {
   if (status === "Ready") return "bg-[#cde0ff] text-[#1f4ca0]";
   if (status === "Preparing") return "bg-[#ffe1a8] text-[#7a4b00]";
   if (status === "Cancelled") return "bg-[#f6c9cc] text-[#9c2228]";
+  if (status === "Confirmed") return "bg-[#e9edf2] text-[#5f6875]";
   return "bg-[#edf0f4] text-[#5f6875]";
 }
 
+function toDisplayStr(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
+
 function normalizePaymentMethod(value?: string | null) {
-  if (!value) return { label: "Pending", value: "pending" };
+  if (!value || typeof value !== "string") return { label: "Pending", value: "pending" };
   const normalized = value.toLowerCase();
   if (normalized === "card") return { label: "Card", value: "card" };
   if (normalized === "cash") return { label: "Cash", value: "cash" };
+  if (normalized === "twint") return { label: "Twint", value: "twint" };
+  if (normalized === "boncard") return { label: "Loyalty Card", value: "boncard" };
   if (normalized === "wallet") return { label: "Wallet", value: "wallet" };
   return { label: value, value: normalized };
 }
@@ -164,7 +175,17 @@ export default function OrdersPage() {
   const [totalItems, setTotalItems] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
   const [locationOptions, setLocationOptions] = useState<Array<{ label: string; value: string }>>([]);
-  const [terminalOptions, setTerminalOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [terminalOptions, setTerminalOptions] = useState<Array<{ label: string; value: string; locationId?: string }>>([]);
+  const [isCreateOrderOpen, setIsCreateOrderOpen] = useState(false);
+  const [createOrderLocationId, setCreateOrderLocationId] = useState("");
+  const [createOrderTerminalId, setCreateOrderTerminalId] = useState("");
+  const [createOrderMode, setCreateOrderMode] = useState<"INDOOR" | "TAKEAWAY">("INDOOR");
+  const [createOrderTableNumber, setCreateOrderTableNumber] = useState("");
+  const [createOrderPaymentMethod, setCreateOrderPaymentMethod] = useState("CARD");
+  const [createOrderItems, setCreateOrderItems] = useState<Array<{ product_id: string; quantity: number }>>([{ product_id: "", quantity: 1 }]);
+  const [createOrderProducts, setCreateOrderProducts] = useState<Array<{ id: string; name: string }>>([]);
+  const [createOrderStaffOverride, setCreateOrderStaffOverride] = useState("");
+  const [isCreateOrderSubmitting, setIsCreateOrderSubmitting] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -197,21 +218,28 @@ export default function OrdersPage() {
       setError("");
       const query = buildOrdersQuery(targetPage, targetPageSize);
       const response = await orderzillaApi.dashboard.orders.list({
-        query: query as never,
+        query,
       });
       const items = (response?.orders ?? []) as ApiOrder[];
       const mapped: UIRow[] = items.map((item) => {
-        const idKey = item.id ?? item.order_number ?? crypto.randomUUID();
+        const idKey = toDisplayStr(item.id ?? item.order_number, "") || crypto.randomUUID();
+        const orderNum = toDisplayStr(item.order_number, "");
+        const totalGross = item.total_gross;
+        const totalStr =
+          totalGross != null && typeof totalGross !== "object"
+            ? `$${totalGross}`
+            : "$0.00";
+        const itemCount = (item as { item_count?: number }).item_count;
         return {
           idKey,
-          id: item.order_number ? `#${item.order_number}` : `#${String(idKey).slice(0, 6)}`,
-          date: formatDateTime(item.created_at),
-          terminal: item.terminal_name ?? item.terminal_code ?? "-",
-          items: 1,
+          id: orderNum ? `#${orderNum}` : `#${String(idKey).slice(0, 6)}`,
+          date: formatDateTime(toDisplayStr(item.created_at, "") || undefined),
+          terminal: toDisplayStr(item.terminal_name ?? item.terminal_code, "-"),
+          items: typeof itemCount === "number" ? itemCount : null,
           type: item.mode === "TAKEAWAY" ? "Takeaway" : "Indoor",
           payment: normalizePaymentMethod(item.payment_method).label,
-          total: item.total_gross ? `$${item.total_gross}` : "$0.00",
-          status: statusToLabel[item.status ?? "PENDING"] ?? "Pending",
+          total: totalStr,
+          status: statusToLabel[toDisplayStr(item.status, "PENDING") as keyof typeof statusToLabel] ?? "Pending",
         };
       });
       setRows(mapped);
@@ -249,6 +277,7 @@ export default function OrdersPage() {
           terminals.map((terminal) => ({
             label: terminal.name ?? terminal.terminal_code ?? "Unnamed terminal",
             value: terminal.id ?? "",
+            locationId: (terminal as { location_id?: string }).location_id ?? "",
           })),
         );
       } catch {
@@ -302,6 +331,7 @@ export default function OrdersPage() {
       {
         all: 0,
         Pending: 0,
+        Confirmed: 0,
         Preparing: 0,
         Ready: 0,
         Completed: 0,
@@ -312,6 +342,7 @@ export default function OrdersPage() {
     return [
       { label: "All Orders", count: counts.all, color: "bg-[#d6ff3e]" },
       { label: "Pending", count: counts.Pending, color: "bg-[#e9edf2]" },
+      { label: "Confirmed", count: counts.Confirmed, color: "bg-[#e9edf2]" },
       { label: "Preparing", count: counts.Preparing, color: "bg-[#ffc14a]" },
       { label: "Ready", count: counts.Ready, color: "bg-[#7eaaf8]" },
       { label: "Completed", count: counts.Completed, color: "bg-[#6bdc95]" },
@@ -470,21 +501,28 @@ export default function OrdersPage() {
 
       while (currentPage <= totalPageCount) {
         const query = buildOrdersQuery(currentPage, exportLimit);
-        const response = await orderzillaApi.dashboard.orders.list({ query: query as never });
+        const response = await orderzillaApi.dashboard.orders.list({ query });
         const items = (response?.orders ?? []) as ApiOrder[];
         allRows.push(
           ...items.map((item) => {
-            const idKey = item.id ?? item.order_number ?? crypto.randomUUID();
+            const idKey = toDisplayStr(item.id ?? item.order_number, "") || crypto.randomUUID();
+            const orderNum = toDisplayStr(item.order_number, "");
+            const totalGross = item.total_gross;
+            const totalStr =
+              totalGross != null && typeof totalGross !== "object"
+                ? `$${totalGross}`
+                : "$0.00";
+            const itemCount = (item as { item_count?: number }).item_count;
             return {
               idKey,
-              id: item.order_number ? `#${item.order_number}` : `#${String(idKey).slice(0, 6)}`,
-              date: formatDateTime(item.created_at),
-              terminal: item.terminal_name ?? item.terminal_code ?? "-",
-              items: 1,
+              id: orderNum ? `#${orderNum}` : `#${String(idKey).slice(0, 6)}`,
+              date: formatDateTime(toDisplayStr(item.created_at, "") || undefined),
+              terminal: toDisplayStr(item.terminal_name ?? item.terminal_code, "-"),
+              items: typeof itemCount === "number" ? itemCount : null,
               type: (item.mode === "TAKEAWAY" ? "Takeaway" : "Indoor") as "Indoor" | "Takeaway",
               payment: normalizePaymentMethod(item.payment_method).label,
-              total: item.total_gross ? `$${item.total_gross}` : "$0.00",
-              status: statusToLabel[item.status ?? "PENDING"] ?? "Pending",
+              total: totalStr,
+              status: statusToLabel[toDisplayStr(item.status, "PENDING") as keyof typeof statusToLabel] ?? "Pending",
             };
           }),
         );
@@ -505,7 +543,7 @@ export default function OrdersPage() {
         row.id,
         row.date,
         row.terminal,
-        String(row.items),
+        row.items != null ? String(row.items) : "—",
         row.type,
         row.payment,
         row.total,
@@ -537,7 +575,85 @@ export default function OrdersPage() {
   };
 
   const handleNewOrder = () => {
-    toast("New order feature coming soon.");
+    setCreateOrderLocationId("");
+    setCreateOrderTerminalId("");
+    setCreateOrderMode("INDOOR");
+    setCreateOrderTableNumber("");
+    setCreateOrderPaymentMethod("CARD");
+    setCreateOrderStaffOverride("");
+    setCreateOrderItems([{ product_id: "", quantity: 1 }]);
+    setIsCreateOrderOpen(true);
+  };
+
+  useEffect(() => {
+    if (isCreateOrderOpen) {
+      orderzillaApi.dashboard.products
+        .list()
+        .then((res) => {
+          const prods = (res as { products?: { id?: string; name?: string }[] })?.products ?? [];
+          setCreateOrderProducts(prods.map((p) => ({ id: p.id ?? "", name: p.name ?? "Unnamed" })));
+        })
+        .catch(() => setCreateOrderProducts([]));
+    }
+  }, [isCreateOrderOpen]);
+
+  const createOrderTerminals = useMemo(
+    () =>
+      createOrderLocationId
+        ? terminalOptions.filter((t) => t.locationId === createOrderLocationId)
+        : terminalOptions,
+    [terminalOptions, createOrderLocationId],
+  );
+
+  const handleCreateOrder = async () => {
+    if (!createOrderLocationId || !createOrderTerminalId) {
+      toast.error("Select location and terminal.");
+      return;
+    }
+    const validItems = createOrderItems.filter((i) => i.product_id && i.quantity > 0);
+    if (validItems.length === 0) {
+      toast.error("Add at least one product.");
+      return;
+    }
+    try {
+      setIsCreateOrderSubmitting(true);
+      await orderzillaApi.dashboard.orders.create({
+        body: {
+          terminal_id: createOrderTerminalId,
+          location_id: createOrderLocationId,
+          mode: createOrderMode,
+          table_number: createOrderTableNumber.trim() || undefined,
+          payment_method: createOrderPaymentMethod,
+          staff_override: createOrderStaffOverride.trim() || undefined,
+          items: validItems.map((i) => ({ product_id: i.product_id, quantity: i.quantity, extras: [] })),
+        },
+      });
+      toast.success("Order created.");
+      setIsCreateOrderOpen(false);
+      fetchOrders(page, pageSize);
+    } catch {
+      toast.error("Failed to create order.");
+    } finally {
+      setIsCreateOrderSubmitting(false);
+    }
+  };
+
+  const addCreateOrderItem = () => {
+    setCreateOrderItems((prev) => [...prev, { product_id: "", quantity: 1 }]);
+  };
+
+  const removeCreateOrderItem = (idx: number) => {
+    setCreateOrderItems((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const updateCreateOrderItem = (idx: number, field: "product_id" | "quantity", value: string | number) => {
+    setCreateOrderItems((prev) =>
+      prev.map((item, i) =>
+        i === idx
+          ? { ...item, [field]: field === "quantity" ? Number(value) || 1 : value }
+          : item,
+      ),
+    );
   };
 
   const deleteSelected = () => {
@@ -681,7 +797,8 @@ export default function OrdersPage() {
                   { label: "All Payments", value: "all" },
                   { label: "Card", value: "card" },
                   { label: "Cash", value: "cash" },
-                  { label: "Wallet", value: "wallet" },
+                  { label: "Twint", value: "twint" },
+                  { label: "Loyalty Card", value: "boncard" },
                   { label: "Pending", value: "pending" },
                 ]}
                 className="min-w-[130px]"
@@ -708,6 +825,7 @@ export default function OrdersPage() {
                 options={[
                   { label: "All Statuses", value: "all" },
                   { label: "Pending", value: "pending" },
+                  { label: "Confirmed", value: "confirmed" },
                   { label: "Preparing", value: "preparing" },
                   { label: "Ready", value: "ready" },
                   { label: "Completed", value: "completed" },
@@ -777,11 +895,18 @@ export default function OrdersPage() {
                   visibleRows.map((order, index) => (
                     <tr
                       key={order.idKey}
-                      className={`border-b last:border-b-0 border-[#edf0f4] text-[12px] ${
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => router.push(`/dashboard/orders/order-detail/${order.idKey}`)}
+                      onKeyDown={(e) =>
+                        e.key === "Enter" &&
+                        router.push(`/dashboard/orders/order-detail/${order.idKey}`)
+                      }
+                      className={`cursor-pointer border-b last:border-b-0 border-[#edf0f4] text-[12px] transition-colors hover:bg-[#f0f4f8] ${
                         index === 1 || index === 3 ? "bg-[#f4f6f8]" : "bg-white"
                       }`}
                     >
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={selectedIds.includes(order.idKey)}
@@ -798,7 +923,7 @@ export default function OrdersPage() {
                       <td className="px-2 py-3 font-semibold text-[#222a35]">{order.id}</td>
                       <td className="px-2 py-3 text-[#3e4653]">{order.date}</td>
                       <td className="px-2 py-3 text-[#3e4653]">{order.terminal}</td>
-                      <td className="px-2 py-3 text-[#3e4653]">{order.items}</td>
+                      <td className="px-2 py-3 text-[#3e4653]">{order.items != null ? order.items : "—"}</td>
                       <td className="px-2 py-3 text-[#3e4653]">{order.type}</td>
                       <td className="px-2 py-3 text-[#3e4653]">{order.payment}</td>
                       <td className="px-2 py-3 font-semibold text-[#222a35]">{order.total}</td>
@@ -811,10 +936,14 @@ export default function OrdersPage() {
                           {order.status}
                         </span>
                       </td>
-                      <td className="px-3 py-3 text-right">
+                      <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                         <RowActionMenu
                           actions={[
-                            { label: "View details", onClick: () => undefined },
+                            {
+                              label: "View details",
+                              onClick: () =>
+                                router.push(`/dashboard/orders/order-detail/${order.idKey}`),
+                            },
                             {
                               label: "Mark completed",
                               onClick: () => setStatusForOrderIds([order.idKey], "Completed"),
@@ -888,6 +1017,160 @@ export default function OrdersPage() {
           }}
         />
       </section>
+
+      {isCreateOrderOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[560px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">New Order</h2>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="block text-[12px] font-semibold text-[#363f4c] mb-1">Location</label>
+                <select
+                  value={createOrderLocationId}
+                  onChange={(e) => {
+                    setCreateOrderLocationId(e.target.value);
+                    setCreateOrderTerminalId("");
+                  }}
+                  className="h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                >
+                  <option value="">Select location</option>
+                  {locationOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[12px] font-semibold text-[#363f4c] mb-1">Terminal</label>
+                <select
+                  value={createOrderTerminalId}
+                  onChange={(e) => setCreateOrderTerminalId(e.target.value)}
+                  className="h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                >
+                  <option value="">Select terminal</option>
+                  {createOrderTerminals.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#363f4c] mb-1">Mode</label>
+                  <select
+                    value={createOrderMode}
+                    onChange={(e) => setCreateOrderMode(e.target.value as "INDOOR" | "TAKEAWAY")}
+                    className="h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                  >
+                    <option value="INDOOR">Indoor</option>
+                    <option value="TAKEAWAY">Takeaway</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#363f4c] mb-1">Payment</label>
+                  <select
+                    value={createOrderPaymentMethod}
+                    onChange={(e) => setCreateOrderPaymentMethod(e.target.value)}
+                    className="h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                  >
+                    <option value="CARD">Card</option>
+                    <option value="CASH">Cash</option>
+                    <option value="TWINT">Twint</option>
+                    <option value="BONCARD">Loyalty Card</option>
+                    <option value="PENDING">Pending</option>
+                  </select>
+                </div>
+              </div>
+              {createOrderMode === "INDOOR" && (
+                <div>
+                  <label className="block text-[12px] font-semibold text-[#363f4c] mb-1">Table number</label>
+                  <input
+                    type="text"
+                    value={createOrderTableNumber}
+                    onChange={(e) => setCreateOrderTableNumber(e.target.value)}
+                    placeholder="e.g. 5"
+                    className="h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                  />
+                </div>
+              )}
+              <div>
+                <label className="block text-[12px] font-semibold text-[#363f4c] mb-1">Staff override (optional)</label>
+                <input
+                  type="text"
+                  value={createOrderStaffOverride}
+                  onChange={(e) => setCreateOrderStaffOverride(e.target.value)}
+                  placeholder="e.g. Admin"
+                  className="h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[12px] font-semibold text-[#363f4c]">Items</label>
+                  <button
+                    type="button"
+                    onClick={addCreateOrderItem}
+                    className="text-[12px] font-semibold text-[#6385b5]"
+                  >
+                    + Add item
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-[180px] overflow-y-auto">
+                  {createOrderItems.map((item, idx) => (
+                    <div key={idx} className="flex gap-2 items-center">
+                      <select
+                        value={item.product_id}
+                        onChange={(e) => updateCreateOrderItem(idx, "product_id", e.target.value)}
+                        className="h-9 flex-1 rounded-lg border border-[#dfe3e8] px-2 text-[12px]"
+                      >
+                        <option value="">Select product</option>
+                        {createOrderProducts.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min={1}
+                        value={item.quantity}
+                        onChange={(e) => updateCreateOrderItem(idx, "quantity", e.target.value)}
+                        className="h-9 w-16 rounded-lg border border-[#dfe3e8] px-2 text-[12px]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeCreateOrderItem(idx)}
+                        disabled={createOrderItems.length === 1}
+                        className="h-9 px-2 rounded-lg border border-[#fecaca] text-[12px] font-semibold text-[#b91c1c] disabled:opacity-50"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsCreateOrderOpen(false)}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateOrder}
+                disabled={isCreateOrderSubmitting}
+                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
+              >
+                {isCreateOrderSubmitting ? "Creating..." : "Create Order"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

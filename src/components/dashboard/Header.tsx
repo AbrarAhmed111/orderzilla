@@ -31,14 +31,14 @@ export default function Header() {
     const fetchLocations = async () => {
       try {
         const response = await orderzillaApi.dashboard.locations.list();
-        const locations = response?.locations ?? [];
+        const locations = (response?.locations ?? []) as Array<{ id?: string; name?: string }>;
         setLocationOptions([
           { label: "All Locations", value: "all" },
           ...locations
-            .filter((location) => Boolean(location.id))
-            .map((location) => ({
-              label: location.name ?? "Unnamed location",
-              value: location.id ?? "",
+            .filter((loc) => Boolean(loc.id))
+            .map((loc) => ({
+              label: loc.name ?? "Unnamed location",
+              value: loc.id ?? "",
             })),
         ]);
       } catch {

@@ -3,12 +3,22 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { isAxiosError } from "axios";
+import { ArrowLeft } from "lucide-react";
 import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api";
 import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
 import { validateField } from "@/lib/validation";
 import type { components } from "@/types/orderzilla-openapi";
+
+const EMPTY_VALUE = "—";
+
+function toDisplayValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
 
 type EditCustomerPageProps = {
   id?: string;
@@ -54,12 +64,16 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
   const [isLoading, setIsLoading] = useState(Boolean(id));
   const [isSaving, setIsSaving] = useState(false);
   const [isAdjusting, setIsAdjusting] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [error, setError] = useState("");
 
   const fetchData = useCallback(
     async (txPageNum = 1) => {
       if (!id) return;
       try {
         setIsLoading(true);
+        setError("");
         const [customerData, txData] = await Promise.all([
           orderzillaApi.dashboard.loyalty.customers.byId(id),
           orderzillaApi.dashboard.loyalty.customers.transactions(id, {
@@ -70,8 +84,8 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
         const txList = (txData?.transactions ?? []) as components["schemas"]["LoyaltyTransaction"][];
         setTransactions(txList);
         setHasMoreTx(txList.length >= TX_PAGE_SIZE);
-        const fullName = `${customerData?.first_name ?? ""} ${customerData?.last_name ?? ""}`.trim();
-        setName(fullName);
+        const fullName = `${toDisplayValue(customerData?.first_name, "")} ${toDisplayValue(customerData?.last_name, "")}`.trim();
+        setName(fullName || EMPTY_VALUE);
         setEmail(customerData?.email ?? "");
         setPhone(customerData?.phone ?? "");
         setBirthDate(customerData?.birth_date ? String(customerData.birth_date).slice(0, 10) : "");
@@ -79,7 +93,9 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
         setPoints(String(customerData?.points_balance ?? 0));
         setActive(customerData?.is_active ?? true);
       } catch {
-        toast.error("Failed to load customer.");
+        setError("Failed to load customer.");
+        setCustomer(null);
+        setTransactions([]);
       } finally {
         setIsLoading(false);
       }
@@ -130,6 +146,21 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
   ]);
   const isAdjustFormValid = !adjustAmountError;
 
+  const onDeleteCustomer = async () => {
+    if (!id) return;
+    try {
+      setIsDeleting(true);
+      await orderzillaApi.dashboard.loyalty.customers.remove(id);
+      toast.success("Customer deleted.");
+      router.push("/dashboard/customers");
+    } catch {
+      toast.error("Failed to delete customer.");
+    } finally {
+      setIsDeleting(false);
+      setIsDeleteModalOpen(false);
+    }
+  };
+
   const onAdjustPoints = async () => {
     if (!id || !isAdjustFormValid) return;
     const amount = Number(adjustAmount);
@@ -148,8 +179,11 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
       const updated = await orderzillaApi.dashboard.loyalty.customers.byId(id);
       setCustomer(updated);
       setPoints(String(updated?.points_balance ?? 0));
-    } catch {
-      toast.error("Failed to adjust points.");
+    } catch (err) {
+      const msg = isAxiosError(err) && err.response?.data && typeof err.response.data === "object" && "message" in err.response.data
+        ? String(err.response.data.message)
+        : "Failed to adjust points.";
+      toast.error(msg);
     } finally {
       setIsAdjusting(false);
     }
@@ -163,12 +197,34 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
     );
   }
 
+  if (error && !customer) {
+    return (
+      <div className="p-3 sm:p-4">
+        <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+          <Link
+            href="/dashboard/customers"
+            className="inline-flex items-center gap-1.5 text-[14px] text-[#616a78] hover:text-[#2f3743]"
+          >
+            <ArrowLeft size={16} />
+            Back to Customers
+          </Link>
+          <div className="mt-4 rounded-lg border border-[#fef3c7] bg-[#fffbeb] px-3 py-2 text-[12px] text-[#92400e]">
+            {error}{" "}
+            <button type="button" onClick={() => fetchData(txPage)} className="font-semibold underline">
+              Retry
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="p-4">
       <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-[14px] text-[#7a8291]">Customers / {name || "Customer"} / Edit</p>
+            <p className="text-[14px] text-[#7a8291]">Customers / {toDisplayValue(name, EMPTY_VALUE)} / Edit</p>
             <h1 className="text-[44px] leading-none font-extrabold text-[#1a2029] mt-1">
               Edit Customer
             </h1>
@@ -188,6 +244,13 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
             >
               Cancel
             </Link>
+            <button
+              type="button"
+              onClick={() => setIsDeleteModalOpen(true)}
+              className="h-10 rounded-lg border border-[#fecaca] bg-[#fef2f2] px-4 text-[14px] font-semibold text-[#dc2626] hover:bg-[#fee2e2]"
+            >
+              Delete Customer
+            </button>
           </div>
         </div>
 
@@ -323,10 +386,10 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
                   transactions.map((tx) => (
                     <tr key={tx.id} className="border-b border-[#edf0f4] text-[14px]">
                       <td className="px-3 py-3 text-[#2f3743]">
-                        {tx.created_at ? new Date(tx.created_at).toLocaleString() : "-"}
+                        {tx.created_at ? new Date(tx.created_at).toLocaleString() : EMPTY_VALUE}
                       </td>
                       <td className="px-2 py-3 font-semibold text-[#2f3743]">
-                        {tx.description ?? tx.type}
+                        {toDisplayValue(tx.description ?? tx.type, EMPTY_VALUE)}
                       </td>
                       <td className="px-2 py-3 font-semibold text-[#2f3743]">
                         {(tx.points ?? 0) > 0 ? "+" : ""}
@@ -389,6 +452,35 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
           </article>
         </div>
       </section>
+
+      {isDeleteModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-[520px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Delete Customer</h2>
+            <p className="mt-2 text-[13px] text-[#6e7785]">
+              Are you sure you want to delete this customer? This action cannot be undone.
+            </p>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setIsDeleteModalOpen(false)}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={onDeleteCustomer}
+                className="h-9 rounded-lg bg-[#ef4a4c] px-4 text-[12px] font-semibold text-white disabled:opacity-50"
+              >
+                {isDeleting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

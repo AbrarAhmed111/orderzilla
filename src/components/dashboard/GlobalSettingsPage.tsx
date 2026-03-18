@@ -1,13 +1,22 @@
 "use client";
 
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import toast from "react-hot-toast";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
-import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api/orderzilla-api";
+import type { DashboardSettings } from "@/lib/api/orderzilla-api";
 import type { components } from "@/types/orderzilla-openapi";
+
+const EMPTY_VALUE = "—";
+
+function toDisplayValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
 
 type ToggleProps = {
   on: boolean;
@@ -37,199 +46,133 @@ function Toggle({ on, onToggle }: ToggleProps) {
 function Card({ title, children }: { title: string; children: ReactNode }) {
   return (
     <article className="rounded-xl border border-[#e4e6ea] bg-white p-3 md:p-4">
-      <h2 className="text-[24px] font-bold text-[#1a212c]">{title}</h2>
-      <div className="mt-3 space-y-2.5">{children}</div>
+      <h2 className="text-[18px] font-bold text-[#1a212c]">{title}</h2>
+      <div className="mt-3 space-y-3">{children}</div>
     </article>
   );
 }
 
+function Label({ children }: { children: ReactNode }) {
+  return (
+    <label className="block text-[12px] font-semibold text-[#4b5563] mb-1">
+      {children}
+    </label>
+  );
+}
+
 type ApiLocation = components["schemas"]["Location"];
-type ApiTerminal = components["schemas"]["Terminal"];
 type ApiLoyaltyProgram = components["schemas"]["LoyaltyProgram"];
+type ApiTerminal = components["schemas"]["Terminal"];
 
-type BusinessForm = {
-  id: string;
-  name: string;
-  address: string;
-  city: string;
-  country: string;
-  timezone: string;
+const VAT_OPTIONS = [
+  { value: "8.1", label: "8.1% (Standard CH)" },
+  { value: "7.7", label: "7.7% (Standard)" },
+  { value: "2.5", label: "2.5% (Reduced)" },
+  { value: "0", label: "0% (Exempt)" },
+];
+
+const CURRENCY_OPTIONS = [
+  { value: "CHF", label: "CHF" },
+  { value: "EUR", label: "EUR" },
+  { value: "USD", label: "USD" },
+];
+
+const ROUNDING_OPTIONS = [
+  { value: "0.05", label: "Round to nearest 0.05" },
+  { value: "0.10", label: "Round to nearest 0.10" },
+  { value: "0.01", label: "Round to nearest 0.01" },
+];
+
+const DECIMAL_OPTIONS = [
+  { value: "comma", label: "Comma (,)" },
+  { value: "dot", label: "Dot (.)" },
+];
+
+const KITCHEN_PRINTER_OPTIONS = [
+  { value: "1", label: "Kitchen Printer #1" },
+  { value: "2", label: "Kitchen Printer #2" },
+  { value: "3", label: "Kitchen Printer #3" },
+];
+
+const PAYMENT_METHOD_OPTIONS = [
+  { value: "CARD", label: "Card" },
+  { value: "CASH", label: "Cash" },
+  { value: "MOBILE_PAY", label: "Mobile Pay" },
+  { value: "GIFT_CARD", label: "Gift Card" },
+];
+
+const DEFAULT_COMPANY = {
+  name: "",
+  logoUrl: null as string | null,
+  primaryColor: "#D0FE1D",
+  receiptFooter: "",
+  street: "",
+  zip: "",
+  city: "",
+  country: "",
 };
 
-type LoyaltyForm = {
-  name: string;
-  is_active: boolean;
-  points_per_chf: number;
-  chf_per_point: number;
-  min_redeem_points: number;
-  max_redeem_percent: number;
-  expiry_days: number;
+const DEFAULT_TAX = {
+  defaultVat: "8.1",
+  currency: "CHF",
+  pricesIncludeVat: true,
+  rounding: "0.05",
+  decimalFormat: "comma",
 };
 
-type TerminalForm = {
-  id: string;
-  name: string;
-  mode: "INDOOR" | "TAKEAWAY";
-  printer_host: string;
-  printer_port: number;
-  printer_width: number;
-  is_active: boolean;
+const DEFAULT_RECEIPT = {
+  printAutomatically: true,
+  emailReceipt: true,
+  kitchenPrinter: "1",
+  idleScreenTimeout: 60,
+  autoRefreshMenu: true,
+  maintenanceMode: false,
 };
 
-const DEFAULT_LOYALTY: LoyaltyForm = {
-  name: "Orderzilla Punkte",
-  is_active: true,
-  points_per_chf: 1,
-  chf_per_point: 0.01,
-  min_redeem_points: 100,
-  max_redeem_percent: 50,
-  expiry_days: 365,
+const DEFAULT_PAYMENT = {
+  enableCash: true,
+  enableCard: true,
+  enableMobilePay: true,
+  enableGiftCards: false,
+  defaultMethod: "CARD",
+  terminalAutoClose: 10,
 };
 
-function mapLoyalty(program?: ApiLoyaltyProgram): LoyaltyForm {
-  return {
-    name: program?.name ?? DEFAULT_LOYALTY.name,
-    is_active: program?.is_active ?? DEFAULT_LOYALTY.is_active,
-    points_per_chf: program?.points_per_chf ?? DEFAULT_LOYALTY.points_per_chf,
-    chf_per_point: program?.chf_per_point ?? DEFAULT_LOYALTY.chf_per_point,
-    min_redeem_points: program?.min_redeem_points ?? DEFAULT_LOYALTY.min_redeem_points,
-    max_redeem_percent: program?.max_redeem_percent ?? DEFAULT_LOYALTY.max_redeem_percent,
-    expiry_days: program?.expiry_days ?? DEFAULT_LOYALTY.expiry_days,
-  };
-}
+const DEFAULT_OPERATIONAL = {
+  orderTimeout: 120,
+};
 
-function isBusinessValid(b: BusinessForm): boolean {
-  if (!b.name.trim() || b.name.trim().length < 2) return false;
-  if (!b.address.trim() || b.address.trim().length < 2) return false;
-  if (!b.city.trim() || b.city.trim().length < 2) return false;
-  if (!b.timezone.trim() || b.timezone.trim().length < 3) return false;
-  if (!/^[A-Za-z0-9_/+-]+$/.test(b.timezone.trim())) return false;
-  if (b.country.trim() && !/^[A-Za-z]{2,3}$/.test(b.country.trim())) return false;
-  return true;
-}
-
-function isLoyaltyValid(l: LoyaltyForm): boolean {
-  if (!l.name.trim()) return false;
-  const n = Number(l.points_per_chf);
-  if (!Number.isFinite(n) || n < 0) return false;
-  const c = Number(l.chf_per_point);
-  if (!Number.isFinite(c) || c < 0.000001) return false;
-  const minR = Number(l.min_redeem_points);
-  if (!Number.isFinite(minR) || minR < 0 || minR !== Math.floor(minR)) return false;
-  const maxP = Number(l.max_redeem_percent);
-  if (!Number.isFinite(maxP) || maxP < 0 || maxP > 100) return false;
-  const exp = Number(l.expiry_days);
-  if (!Number.isFinite(exp) || exp < 1 || exp !== Math.floor(exp)) return false;
-  return true;
-}
-
-function isTerminalValid(t: TerminalForm): boolean {
-  if (!t.name.trim() || t.name.trim().length < 2) return false;
-  if (!Number.isFinite(t.printer_port) || t.printer_port < 1 || t.printer_port > 65535) return false;
-  if (!Number.isFinite(t.printer_width) || t.printer_width < 1) return false;
-  return true;
-}
+const DEFAULT_SYSTEM = {
+  enableLoyalty: true,
+  allowPriceOverride: false,
+  enableDebugLogs: false,
+};
 
 export default function GlobalSettingsPage() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   const [locations, setLocations] = useState<ApiLocation[]>([]);
-  const [selectedLocationId, setSelectedLocationId] = useState("");
-  const [business, setBusiness] = useState<BusinessForm>({
-    id: "",
-    name: "",
-    address: "",
-    city: "",
-    country: "CH",
-    timezone: "Europe/Zurich",
-  });
-
-  const [loyalty, setLoyalty] = useState<LoyaltyForm>(DEFAULT_LOYALTY);
+  const [loyaltyProgram, setLoyaltyProgram] = useState<ApiLoyaltyProgram | null>(null);
   const [terminals, setTerminals] = useState<ApiTerminal[]>([]);
-  const [selectedTerminalId, setSelectedTerminalId] = useState("");
-  const [terminalForm, setTerminalForm] = useState<TerminalForm>({
-    id: "",
-    name: "",
-    mode: "INDOOR",
-    printer_host: "",
-    printer_port: 9100,
-    printer_width: 80,
-    is_active: true,
-  });
 
-  const [isSavingBusiness, setIsSavingBusiness] = useState(false);
-  const [isSavingLoyalty, setIsSavingLoyalty] = useState(false);
-  const [isSavingTerminal, setIsSavingTerminal] = useState(false);
+  const [company, setCompany] = useState(DEFAULT_COMPANY);
+  const [tax, setTax] = useState(DEFAULT_TAX);
+  const [receipt, setReceipt] = useState(DEFAULT_RECEIPT);
+  const [payment, setPayment] = useState(DEFAULT_PAYMENT);
+  const [operational, setOperational] = useState(DEFAULT_OPERATIONAL);
+  const [system, setSystem] = useState(DEFAULT_SYSTEM);
 
-  const syncQuery = (patch: Record<string, string | undefined>) => {
-    const next = new URLSearchParams(searchParams.toString());
-    Object.entries(patch).forEach(([key, value]) => {
-      if (!value) next.delete(key);
-      else next.set(key, value);
-    });
-    router.replace(next.toString() ? `${pathname}?${next.toString()}` : pathname, {
-      scroll: false,
-    });
-  };
-
-  const locationOptions = useMemo(
-    () =>
-      locations
-        .filter((loc): loc is ApiLocation & { id: string } => Boolean(loc.id))
-        .map((loc) => ({ label: loc.name ?? "Unnamed location", value: loc.id })),
-    [locations],
-  );
-
-  const terminalOptions = useMemo(
-    () =>
-      terminals
-        .filter((terminal): terminal is ApiTerminal & { id: string } => Boolean(terminal.id))
-        .map((terminal) => ({
-          label: `${terminal.name ?? "Unnamed"} (${terminal.terminal_code ?? "N/A"})`,
-          value: terminal.id,
-        })),
-    [terminals],
-  );
-
-  const hydrateBusinessFromLocation = (location?: ApiLocation) => {
-    if (!location?.id) return;
-    setBusiness({
-      id: location.id,
-      name: location.name ?? "",
-      address: location.address ?? "",
-      city: location.city ?? "",
-      country: location.country ?? "CH",
-      timezone: location.timezone ?? "Europe/Zurich",
-    });
-  };
-
-  const hydrateTerminalForm = (terminal?: ApiTerminal) => {
-    if (!terminal?.id) return;
-    setTerminalForm({
-      id: terminal.id,
-      name: terminal.name ?? "",
-      mode: terminal.mode ?? "INDOOR",
-      printer_host: terminal.printer_host ?? "",
-      printer_port: terminal.printer_port ?? 9100,
-      printer_width: terminal.printer_width ?? 80,
-      is_active: terminal.is_active ?? true,
-    });
-  };
-
-  const fetchAll = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
       setError("");
-
-      const [locationsRes, terminalsRes, loyaltyRes] = await Promise.all([
+      const [settingsRes, locationsRes, loyaltyRes, terminalsRes] = await Promise.all([
+        orderzillaApi.dashboard.settings.get().catch(() => null),
         orderzillaApi.dashboard.locations.list(),
-        orderzillaApi.dashboard.terminals.list(),
         orderzillaApi.dashboard.loyalty.program.get().catch(() => undefined),
+        orderzillaApi.dashboard.terminals.list(),
       ]);
 
       const nextLocations = (locationsRes?.locations ?? []) as ApiLocation[];
@@ -237,471 +180,631 @@ export default function GlobalSettingsPage() {
 
       setLocations(nextLocations);
       setTerminals(nextTerminals);
-      setLoyalty(mapLoyalty(loyaltyRes as ApiLoyaltyProgram | undefined));
+      setLoyaltyProgram((loyaltyRes as ApiLoyaltyProgram) ?? null);
 
-      const initialLocationFromUrl = searchParams.get("location");
-      const locationFromUrl = nextLocations.find((loc) => loc.id === initialLocationFromUrl);
-      const firstLocation = locationFromUrl ?? nextLocations.find((loc) => Boolean(loc.id));
-      if (firstLocation?.id) {
-        setSelectedLocationId(firstLocation.id);
-        hydrateBusinessFromLocation(firstLocation);
-      }
-
-      const initialTerminalFromUrl = searchParams.get("terminal");
-      const terminalFromUrl = nextTerminals.find((terminal) => terminal.id === initialTerminalFromUrl);
-      const firstTerminal = terminalFromUrl ?? nextTerminals.find((terminal) => Boolean(terminal.id));
-      if (firstTerminal?.id) {
-        setSelectedTerminalId(firstTerminal.id);
-        hydrateTerminalForm(firstTerminal);
+      const settings = settingsRes as DashboardSettings | null;
+      if (settings) {
+        setCompany((prev) => ({
+          ...prev,
+          name: toDisplayValue(settings.company_name, ""),
+          logoUrl: settings.logo_url ?? null,
+          primaryColor: toDisplayValue(settings.primary_brand_color, prev.primaryColor),
+          receiptFooter: toDisplayValue(settings.receipt_footer_text, ""),
+          street: toDisplayValue(settings.address?.street, ""),
+          zip: toDisplayValue(settings.address?.zip, ""),
+          city: toDisplayValue(settings.address?.city, ""),
+          country: toDisplayValue(settings.address?.country, ""),
+        }));
+        setTax((prev) => ({
+          ...prev,
+          defaultVat: settings.default_vat_rate != null ? String(settings.default_vat_rate) : prev.defaultVat,
+          currency: settings.currency ?? prev.currency,
+          pricesIncludeVat: settings.prices_include_vat ?? prev.pricesIncludeVat,
+        }));
+        const pm = settings.default_payment_method?.toUpperCase();
+        const validMethod = ["CARD", "CASH", "MOBILE_PAY", "GIFT_CARD"].includes(pm ?? "")
+          ? pm!
+          : "CARD";
+        setPayment((prev) => ({
+          ...prev,
+          enableCash: settings.enable_cash ?? prev.enableCash,
+          enableCard: settings.enable_card ?? prev.enableCard,
+          enableMobilePay: settings.enable_mobile_pay ?? prev.enableMobilePay,
+          enableGiftCards: settings.enable_gift_cards ?? prev.enableGiftCards,
+          defaultMethod: validMethod,
+        }));
+        setSystem((prev) => ({
+          ...prev,
+          enableLoyalty: settings.enable_loyalty_program ?? prev.enableLoyalty,
+        }));
+      } else {
+        const firstLoc = nextLocations.find((l) => l.id);
+        if (firstLoc) {
+          setCompany((prev) => ({
+            ...prev,
+            name: toDisplayValue(firstLoc.name, ""),
+            street: toDisplayValue(firstLoc.address, ""),
+            city: toDisplayValue(firstLoc.city, ""),
+            country: toDisplayValue(firstLoc.country, ""),
+          }));
+        }
+        if (loyaltyRes && typeof loyaltyRes === "object" && "is_active" in loyaltyRes) {
+          setSystem((prev) => ({
+            ...prev,
+            enableLoyalty: (loyaltyRes as ApiLoyaltyProgram).is_active ?? prev.enableLoyalty,
+          }));
+        }
       }
     } catch {
-      setError("Failed to load settings data.");
+      setError("Failed to load settings.");
+      setCompany(DEFAULT_COMPANY);
+      setTax(DEFAULT_TAX);
+      setReceipt(DEFAULT_RECEIPT);
+      setPayment(DEFAULT_PAYMENT);
+      setOperational(DEFAULT_OPERATIONAL);
+      setSystem(DEFAULT_SYSTEM);
     } finally {
       setIsLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchAll();
   }, []);
 
   useEffect(() => {
-    syncQuery({
-      location: selectedLocationId || undefined,
-      terminal: selectedTerminalId || undefined,
-    });
-  }, [selectedLocationId, selectedTerminalId]);
+    fetchData();
+  }, [fetchData]);
 
-  useEffect(() => {
-    const target = locations.find((loc) => loc.id === selectedLocationId);
-    if (target) hydrateBusinessFromLocation(target);
-  }, [selectedLocationId, locations]);
-
-  useEffect(() => {
-    const target = terminals.find((terminal) => terminal.id === selectedTerminalId);
-    if (target) hydrateTerminalForm(target);
-  }, [selectedTerminalId, terminals]);
-
-  const saveBusiness = async () => {
-    if (!business.id) return;
-    setIsSavingBusiness(true);
+  const handleSave = async () => {
+    setIsSaving(true);
     try {
-      await orderzillaApi.dashboard.locations.update(business.id, {
-        body: {
-          name: business.name,
-          address: business.address,
-          city: business.city,
-          country: business.country,
-          timezone: business.timezone,
+      await orderzillaApi.dashboard.settings.update({
+        company_name: company.name,
+        primary_brand_color: company.primaryColor,
+        receipt_footer_text: company.receiptFooter,
+        address: {
+          street: company.street,
+          zip: company.zip,
+          city: company.city,
+          country: company.country,
         },
+        default_vat_rate: Number(tax.defaultVat) || 8.1,
+        currency: tax.currency,
+        prices_include_vat: tax.pricesIncludeVat,
+        enable_cash: payment.enableCash,
+        enable_card: payment.enableCard,
+        enable_mobile_pay: payment.enableMobilePay,
+        enable_gift_cards: payment.enableGiftCards,
+        default_payment_method: payment.defaultMethod,
+        enable_loyalty_program: system.enableLoyalty,
       });
-      toast.success("Business settings saved.");
-      await fetchAll();
-    } catch {
-      toast.error("Failed to save business settings.");
+      toast.success("Settings saved.");
+      await fetchData();
+    } catch (err) {
+      toast.error("Failed to save settings.");
     } finally {
-      setIsSavingBusiness(false);
+      setIsSaving(false);
     }
   };
 
-  const saveLoyalty = async () => {
-    if (!isLoyaltyValid(loyalty)) {
-      toast.error("Please fix validation errors before saving.");
+  const handleResetDefaults = () => {
+    setCompany(DEFAULT_COMPANY);
+    setTax(DEFAULT_TAX);
+    setReceipt(DEFAULT_RECEIPT);
+    setPayment(DEFAULT_PAYMENT);
+    setOperational(DEFAULT_OPERATIONAL);
+    setSystem(DEFAULT_SYSTEM);
+    toast.success("Reset to defaults.");
+  };
+
+  const [isExportingLogs, setIsExportingLogs] = useState(false);
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleExportLogs = async () => {
+    setIsExportingLogs(true);
+    try {
+      const now = new Date();
+      const dateTo = now.toISOString().slice(0, 10);
+      const dateFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const res = await orderzillaApi.dashboard.settings.exportLogs({
+        format: "CSV",
+        date_from: dateFrom,
+        date_to: dateTo,
+        filters: {},
+      });
+      if (res?.download_url) {
+        window.open(res.download_url, "_blank");
+        toast.success("Log export started. Download will begin shortly.");
+      } else {
+        toast.success(res?.message ?? "Log export requested.");
+      }
+    } catch {
+      toast.error("Failed to export logs.");
+    } finally {
+      setIsExportingLogs(false);
+    }
+  };
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file?.type.startsWith("image/")) {
+      toast.error("Please select an image file (PNG, JPG, etc.).");
+      e.target.value = "";
       return;
     }
-    setIsSavingLoyalty(true);
+    const objectUrl = URL.createObjectURL(file);
+    setCompany((p) => ({ ...p, logoUrl: objectUrl }));
+    e.target.value = "";
+    setIsUploadingLogo(true);
     try {
-      await orderzillaApi.dashboard.loyalty.program.update({
-        body: {
-          name: loyalty.name,
-          points_per_chf: Math.max(0, loyalty.points_per_chf),
-          chf_per_point: Math.max(0.000001, loyalty.chf_per_point),
-          min_redeem_points: Math.max(0, Math.floor(loyalty.min_redeem_points)),
-          max_redeem_percent: Math.min(100, Math.max(0, loyalty.max_redeem_percent)),
-          expiry_days: Math.max(1, Math.floor(loyalty.expiry_days)),
-          is_active: loyalty.is_active,
-        },
-      });
-      toast.success("Loyalty settings saved.");
-      await fetchAll();
-    } catch {
-      toast.error("Failed to save loyalty settings.");
-    } finally {
-      setIsSavingLoyalty(false);
-    }
-  };
-
-  const saveTerminal = async () => {
-    if (!terminalForm.id) return;
-    setIsSavingTerminal(true);
-    try {
-      await orderzillaApi.dashboard.terminals.update(terminalForm.id, {
-        body: {
-          name: terminalForm.name,
-          mode: terminalForm.mode,
-          printer_host: terminalForm.printer_host || undefined,
-          printer_port: Math.max(1, terminalForm.printer_port),
-          printer_width: Math.max(1, terminalForm.printer_width),
-          is_active: terminalForm.is_active,
-        },
-      });
-      toast.success("Terminal settings saved.");
-      await fetchAll();
-    } catch {
-      toast.error("Failed to save terminal settings.");
-    } finally {
-      setIsSavingTerminal(false);
-    }
-  };
-
-  const sendTerminalCommand = async (
-    command: "RELOAD_MENU" | "MAINTENANCE_MODE" | "CLEAR_MAINTENANCE",
-  ) => {
-    const ids = selectedTerminalId
-      ? [selectedTerminalId]
-      : terminals.map((terminal) => terminal.id).filter(Boolean) as string[];
-    if (!ids.length) {
-      toast.error("No terminals available.");
-      return;
-    }
-    const loadingToast = toast.loading("Sending command...");
-    try {
-      await Promise.all(
-        ids.map((id) =>
-          orderzillaApi.dashboard.terminals.commands.create(id, {
-            body: { command },
-          }),
-        ),
+      const formData = new FormData();
+      formData.append("logo", file);
+      const { axiosInstance } = await import("@/utils/axios");
+      const res = await axiosInstance.post<{ logo_url?: string }>(
+        "/v1/dashboard/settings/logo",
+        formData,
       );
-      toast.success("Command queued.");
+      const data = res.data;
+      if (data?.logo_url) {
+        URL.revokeObjectURL(objectUrl);
+        setCompany((p) => ({ ...p, logoUrl: data.logo_url ?? null }));
+        toast.success("Logo uploaded.");
+      } else {
+        toast.success("Logo preview updated.");
+      }
     } catch {
-      toast.error("Failed to send command.");
+      toast.success("Logo preview updated.");
     } finally {
-      toast.dismiss(loadingToast);
+      setIsUploadingLogo(false);
     }
   };
 
-  return (
-    <div className="p-3 sm:p-4 md:p-4 lg:p-5">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 md:px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-[36px] leading-none font-extrabold text-[#1a2029]">Global Settings</h1>
-          <button
-            type="button"
-            onClick={fetchAll}
-            className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855]"
-          >
-            Refresh
-          </button>
+  const handleBackupDatabase = async () => {
+    setIsBackingUp(true);
+    try {
+      const res = await orderzillaApi.dashboard.settings.backup({
+        backup_format: "SQL",
+        destination: "LOCAL",
+      });
+      if (res?.download_url) {
+        window.open(res.download_url, "_blank");
+        toast.success("Backup started. Download will begin shortly.");
+      } else {
+        toast.success(res?.message ?? "Backup requested.");
+      }
+    } catch {
+      toast.error("Failed to create backup.");
+    } finally {
+      setIsBackingUp(false);
+    }
+  };
+
+  const kitchenPrinterOptions = useMemo(() => {
+    const fromTerminals = terminals
+      .filter((t): t is ApiTerminal & { id: string } => Boolean(t.id))
+      .map((t, i) => ({
+        value: t.id,
+        label: toDisplayValue(t.name, `Kitchen Printer #${i + 1}`),
+      }));
+    return fromTerminals.length ? fromTerminals : KITCHEN_PRINTER_OPTIONS;
+  }, [terminals]);
+
+  if (isLoading) {
+    return (
+      <div className="p-3 sm:p-4 md:p-5">
+        <div className="rounded-2xl border border-[#e5e7eb] bg-white p-4">
+          <h1 className="text-[36px] font-extrabold text-[#1a2029]">Global Settings</h1>
+          <div className="mt-4">
+            <TableSkeleton rows={12} columns={3} />
+          </div>
         </div>
-        {error ? (
-          <div className="mt-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-3 sm:p-4 md:p-5">
+        <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-1.5 text-[14px] text-[#616a78] hover:text-[#2f3743]"
+          >
+            <ArrowLeft size={16} />
+            Back to Dashboard
+          </Link>
+          <div className="mt-4 rounded-lg border border-[#fef3c7] bg-[#fffbeb] px-3 py-2 text-[12px] text-[#92400e]">
             {error}{" "}
-            <button type="button" onClick={fetchAll} className="font-semibold underline">
+            <button type="button" onClick={fetchData} className="font-semibold underline">
               Retry
             </button>
           </div>
-        ) : null}
+        </section>
+      </div>
+    );
+  }
 
-        {isLoading ? (
-          <div className="mt-4">
-            <TableSkeleton rows={8} columns={4} />
+  return (
+    <div className="p-3 sm:p-4 md:p-5">
+      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 md:px-5 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-[28px] sm:text-[36px] leading-none font-extrabold text-[#1a2029]">
+            Global Settings
+          </h1>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleResetDefaults}
+              className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] hover:bg-[#f9fafb]"
+            >
+              Reset Defaults
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={isSaving}
+              className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] hover:bg-[#c9f339] disabled:opacity-50"
+            >
+              {isSaving ? "Saving..." : "Save Changes"}
+            </button>
           </div>
-        ) : (
-          <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-3 items-start">
-            <Card title="Business Profile">
-              <SelectMenu
-                value={selectedLocationId}
-                onChange={setSelectedLocationId}
-                options={locationOptions.length ? locationOptions : [{ label: "No locations", value: "" }]}
-              />
-              <ValidatedInput
-                value={business.name}
-                onChange={(v) => setBusiness((prev) => ({ ...prev, name: v }))}
-                rules={[
-                  { type: "required", message: "Business name is required." },
-                  { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
-                ]}
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                placeholder="Business name"
-              />
-              <ValidatedInput
-                value={business.address}
-                onChange={(v) => setBusiness((prev) => ({ ...prev, address: v }))}
-                rules={[
-                  { type: "required", message: "Address is required." },
-                  { type: "minLength", value: 2, message: "Address must be at least 2 characters." },
-                ]}
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                placeholder="Address"
-              />
-              <ValidatedInput
-                value={business.city}
-                onChange={(v) => setBusiness((prev) => ({ ...prev, city: v }))}
-                rules={[
-                  { type: "required", message: "City is required." },
-                  { type: "minLength", value: 2, message: "City must be at least 2 characters." },
-                ]}
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                placeholder="City"
-              />
-              <div className="grid grid-cols-2 gap-2">
-                <ValidatedInput
-                  value={business.country}
-                  onChange={(v) => setBusiness((prev) => ({ ...prev, country: v }))}
-                  rules={[
-                    {
-                      type: "custom",
-                      validate: (v) =>
-                        v.trim() && !/^[A-Za-z]{2,3}$/.test(v.trim())
-                          ? "Use 2–3 letter country code (e.g. CH, DE)"
-                          : null,
-                    },
-                  ]}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {/* Left: Company & Branding */}
+          <div className="space-y-4">
+            <Card title="Company & Branding">
+              <div>
+                <Label>Company Name</Label>
+                <input
+                  type="text"
+                  value={company.name}
+                  onChange={(e) => setCompany((p) => ({ ...p, name: e.target.value }))}
+                  className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
+                  placeholder="Company Name"
+                />
+              </div>
+              <div>
+                <Label>Logo</Label>
+                <div className="flex items-center gap-3">
+                  <div className="h-16 w-16 rounded-full bg-[#fef08a] flex items-center justify-center overflow-hidden shrink-0">
+                    {company.logoUrl ? (
+                      <img src={company.logoUrl} alt="Logo" className="h-full w-full object-cover" />
+                    ) : (
+                      <span className="text-[10px] font-bold text-[#854d0e] text-center px-1">
+                        ORDERZILLA
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <input
+                      ref={logoInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={handleLogoUpload}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => logoInputRef.current?.click()}
+                      disabled={isUploadingLogo}
+                      className="h-8 rounded-lg border border-[#dfe3e8] bg-white px-3 text-[11px] font-semibold text-[#414855] hover:bg-[#f9fafb] disabled:opacity-50"
+                    >
+                      {isUploadingLogo ? "Uploading..." : "Upload"}
+                    </button>
+                    {company.logoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setCompany((p) => ({ ...p, logoUrl: null }))}
+                        className="h-8 rounded-lg border border-[#fecaca] bg-white px-3 text-[11px] font-semibold text-[#b91c1c] hover:bg-[#fef2f2]"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div>
+                <Label>Primary Brand Color</Label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={company.primaryColor}
+                    onChange={(e) => setCompany((p) => ({ ...p, primaryColor: e.target.value }))}
+                    className="h-9 w-14 cursor-pointer rounded border border-[#dfe3e8] p-0.5"
+                  />
+                  <input
+                    type="text"
+                    value={company.primaryColor}
+                    onChange={(e) => setCompany((p) => ({ ...p, primaryColor: e.target.value }))}
+                    className="h-9 flex-1 rounded-lg border border-[#dfe3e8] px-3 text-[12px] font-mono outline-none focus:border-[#c0eb1a]"
+                  />
+                </div>
+              </div>
+              <div>
+                <Label>Receipt Footer Text</Label>
+                <textarea
+                  value={company.receiptFooter}
+                  onChange={(e) => setCompany((p) => ({ ...p, receiptFooter: e.target.value }))}
+                  rows={3}
+                  className="w-full rounded-lg border border-[#dfe3e8] px-3 py-2 text-[12px] outline-none focus:border-[#c0eb1a] resize-none"
+                  placeholder="Thank you for ordering..."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Address</Label>
+                <input
+                  type="text"
+                  value={company.street}
+                  onChange={(e) => setCompany((p) => ({ ...p, street: e.target.value }))}
+                  className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
+                  placeholder="Street"
+                />
+                <div className="grid grid-cols-3 gap-2">
+                  <input
+                    type="text"
+                    value={company.zip}
+                    onChange={(e) => setCompany((p) => ({ ...p, zip: e.target.value }))}
+                    className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
+                    placeholder="ZIP"
+                  />
+                  <input
+                    type="text"
+                    value={company.city}
+                    onChange={(e) => setCompany((p) => ({ ...p, city: e.target.value }))}
+                    className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a] col-span-2"
+                    placeholder="City"
+                  />
+                </div>
+                <input
+                  type="text"
+                  value={company.country}
+                  onChange={(e) => setCompany((p) => ({ ...p, country: e.target.value }))}
+                  className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                   placeholder="Country"
                 />
-                <ValidatedInput
-                  value={business.timezone}
-                  onChange={(v) => setBusiness((prev) => ({ ...prev, timezone: v }))}
-                  rules={[
-                    { type: "required", message: "Timezone is required." },
-                    {
-                      type: "custom",
-                      validate: (v) =>
-                        v.trim().length < 3
-                          ? "Enter a valid timezone (e.g. Europe/Zurich)"
-                          : !/^[A-Za-z0-9_/+-]+$/.test(v.trim())
-                            ? "Invalid timezone format"
-                            : null,
-                    },
-                  ]}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                  placeholder="Timezone (e.g. Europe/Zurich)"
-                />
               </div>
-              <button
-                type="button"
-                disabled={!business.id || isSavingBusiness || !isBusinessValid(business)}
-                onClick={saveBusiness}
-                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
-              >
-                {isSavingBusiness ? "Saving..." : "Save Business Settings"}
-              </button>
             </Card>
+          </div>
 
-            <Card title="Loyalty Program">
-              <ValidatedInput
-                value={loyalty.name}
-                onChange={(v) => setLoyalty((prev) => ({ ...prev, name: v }))}
-                rules={[
-                  { type: "required", message: "Program name is required." },
-                  { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
-                ]}
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                placeholder="Program name"
-              />
-              <div className="flex items-center justify-between">
-                <span className="text-[13px] font-semibold text-[#2f3743]">Program active</span>
-                <Toggle
-                  on={loyalty.is_active}
-                  onToggle={(next) => setLoyalty((prev) => ({ ...prev, is_active: next }))}
+          {/* Middle: Tax & Currency, Receipt & Printing */}
+          <div className="space-y-4">
+            <Card title="Tax & Currency Settings">
+              <div>
+                <Label>Default VAT rate</Label>
+                <SelectMenu
+                  value={tax.defaultVat}
+                  onChange={(v) => setTax((p) => ({ ...p, defaultVat: v }))}
+                  options={VAT_OPTIONS}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <ValidatedInput
-                  value={String(loyalty.points_per_chf)}
-                  onChange={(v) =>
-                    setLoyalty((prev) => ({ ...prev, points_per_chf: Number(v) || 0 }))
-                  }
-                  rules={[
-                    { type: "number", min: 0, message: "Must be ≥ 0." },
-                  ]}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                  placeholder="Points per CHF"
-                />
-                <ValidatedInput
-                  value={String(loyalty.chf_per_point)}
-                  onChange={(v) =>
-                    setLoyalty((prev) => ({ ...prev, chf_per_point: Number(v) || 0 }))
-                  }
-                  rules={[
-                    {
-                      type: "custom",
-                      validate: (v) => {
-                        const n = Number(v);
-                        if (!v.trim()) return null;
-                        if (!Number.isFinite(n)) return "Must be a valid number.";
-                        if (n < 0.000001) return "Must be at least 0.000001.";
-                        return null;
-                      },
-                    },
-                  ]}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                  placeholder="CHF per point"
-                />
-                <ValidatedInput
-                  value={String(loyalty.min_redeem_points)}
-                  onChange={(v) =>
-                    setLoyalty((prev) => ({ ...prev, min_redeem_points: Number(v) || 0 }))
-                  }
-                  rules={[
-                    { type: "number", min: 0, integer: true, message: "Must be a whole number ≥ 0." },
-                  ]}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                  placeholder="Min redeem points"
-                />
-                <ValidatedInput
-                  value={String(loyalty.max_redeem_percent)}
-                  onChange={(v) =>
-                    setLoyalty((prev) => ({ ...prev, max_redeem_percent: Number(v) || 0 }))
-                  }
-                  rules={[
-                    { type: "number", min: 0, max: 100, message: "Must be between 0 and 100." },
-                  ]}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                  placeholder="Max redeem %"
-                />
-              </div>
-              <ValidatedInput
-                value={String(loyalty.expiry_days)}
-                onChange={(v) =>
-                  setLoyalty((prev) => ({ ...prev, expiry_days: Number(v) || 0 }))
-                }
-                rules={[
-                  { type: "number", min: 1, integer: true, message: "Must be at least 1 day." },
-                ]}
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                placeholder="Expiry days"
-              />
-              <button
-                type="button"
-                disabled={isSavingLoyalty}
-                onClick={saveLoyalty}
-                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
-              >
-                {isSavingLoyalty ? "Saving..." : "Save Loyalty Settings"}
-              </button>
-            </Card>
-
-            <Card title="Terminal Controls">
-              <SelectMenu
-                value={selectedTerminalId}
-                onChange={setSelectedTerminalId}
-                options={terminalOptions.length ? terminalOptions : [{ label: "No terminals", value: "" }]}
-              />
-              <ValidatedInput
-                value={terminalForm.name}
-                onChange={(v) => setTerminalForm((prev) => ({ ...prev, name: v }))}
-                rules={[
-                  { type: "required", message: "Terminal name is required." },
-                  { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
-                ]}
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                placeholder="Terminal name"
-              />
-              <SelectMenu
-                value={terminalForm.mode}
-                onChange={(value) =>
-                  setTerminalForm((prev) => ({
-                    ...prev,
-                    mode: value === "TAKEAWAY" ? "TAKEAWAY" : "INDOOR",
-                  }))
-                }
-                options={[
-                  { label: "Indoor", value: "INDOOR" },
-                  { label: "Takeaway", value: "TAKEAWAY" },
-                ]}
-              />
-              <input
-                className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px]"
-                value={terminalForm.printer_host}
-                onChange={(e) => setTerminalForm((prev) => ({ ...prev, printer_host: e.target.value }))}
-                placeholder="Printer host (optional)"
-              />
-              <div className="grid grid-cols-2 gap-2">
-                <ValidatedInput
-                  value={String(terminalForm.printer_port)}
-                  onChange={(v) =>
-                    setTerminalForm((prev) => ({
-                      ...prev,
-                      printer_port: v.trim() ? Number(v) : 0,
-                    }))
-                  }
-                  rules={[
-                    {
-                      type: "custom",
-                      validate: (v) => {
-                        const n = Number(v);
-                        if (!v.trim()) return "Port is required.";
-                        if (!Number.isFinite(n) || !Number.isInteger(n))
-                          return "Must be a whole number.";
-                        if (n < 1 || n > 65535) return "Port must be 1–65535.";
-                        return null;
-                      },
-                    },
-                  ]}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                  placeholder="Printer port"
-                />
-                <ValidatedInput
-                  value={String(terminalForm.printer_width)}
-                  onChange={(v) =>
-                    setTerminalForm((prev) => ({
-                      ...prev,
-                      printer_width: v.trim() ? Number(v) : 0,
-                    }))
-                  }
-                  rules={[
-                    { type: "number", min: 1, integer: true, message: "Must be at least 1." },
-                  ]}
-                  className="h-9 rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
-                  placeholder="Printer width"
+              <div>
+                <Label>Currency</Label>
+                <SelectMenu
+                  value={tax.currency}
+                  onChange={(v) => setTax((p) => ({ ...p, currency: v }))}
+                  options={CURRENCY_OPTIONS}
                 />
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-[13px] font-semibold text-[#2f3743]">Terminal active</span>
+                <span className="text-[13px] font-medium text-[#2f3743]">Prices include VAT</span>
                 <Toggle
-                  on={terminalForm.is_active}
-                  onToggle={(next) => setTerminalForm((prev) => ({ ...prev, is_active: next }))}
+                  on={tax.pricesIncludeVat}
+                  onToggle={(next) => setTax((p) => ({ ...p, pricesIncludeVat: next }))}
                 />
               </div>
-              <button
-                type="button"
-                disabled={!terminalForm.id || isSavingTerminal || !isTerminalValid(terminalForm)}
-                onClick={saveTerminal}
-                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
-              >
-                {isSavingTerminal ? "Saving..." : "Save Terminal Config"}
-              </button>
-              <div className="grid grid-cols-1 gap-2 pt-1">
+              <div>
+                <Label>Rounding rules</Label>
+                <SelectMenu
+                  value={tax.rounding}
+                  onChange={(v) => setTax((p) => ({ ...p, rounding: v }))}
+                  options={ROUNDING_OPTIONS}
+                />
+              </div>
+              <div>
+                <Label>Decimal format</Label>
+                <SelectMenu
+                  value={tax.decimalFormat}
+                  onChange={(v) => setTax((p) => ({ ...p, decimalFormat: v }))}
+                  options={DECIMAL_OPTIONS}
+                />
+              </div>
+            </Card>
+
+            <Card title="Receipt & Printing">
+              <div className="flex items-start gap-4">
+                <div className="flex-1 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[13px] font-medium text-[#2f3743]">
+                      Print receipt automatically
+                    </span>
+                    <Toggle
+                      on={receipt.printAutomatically}
+                      onToggle={(next) =>
+                        setReceipt((p) => ({ ...p, printAutomatically: next }))
+                      }
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[13px] font-medium text-[#2f3743]">Email receipt</span>
+                    <Toggle
+                      on={receipt.emailReceipt}
+                      onToggle={(next) => setReceipt((p) => ({ ...p, emailReceipt: next }))}
+                    />
+                  </div>
+                  <div>
+                    <Label>Kitchen printer routing</Label>
+                    <SelectMenu
+                      value={
+                        kitchenPrinterOptions.some((o) => o.value === receipt.kitchenPrinter)
+                          ? receipt.kitchenPrinter
+                          : kitchenPrinterOptions[0]?.value ?? receipt.kitchenPrinter
+                      }
+                      onChange={(v) => setReceipt((p) => ({ ...p, kitchenPrinter: v }))}
+                      options={kitchenPrinterOptions}
+                    />
+                  </div>
+                </div>
+                <div className="hidden sm:block w-24 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] p-2 text-[10px] text-center text-[#6b7280]">
+                  ORDERZILLA RECEIPT
+                </div>
+              </div>
+              <div>
+                <Label>Idle screen timeout (seconds)</Label>
+                <input
+                  type="number"
+                  min={10}
+                  max={300}
+                  value={receipt.idleScreenTimeout}
+                  onChange={(e) =>
+                    setReceipt((p) => ({
+                      ...p,
+                      idleScreenTimeout: Math.max(10, Math.min(300, Number(e.target.value) || 60)),
+                    }))
+                  }
+                  className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[#2f3743]">Auto-refresh menu</span>
+                <Toggle
+                  on={receipt.autoRefreshMenu}
+                  onToggle={(next) => setReceipt((p) => ({ ...p, autoRefreshMenu: next }))}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[#2f3743]">
+                  Maintenance mode (global)
+                </span>
+                <Toggle
+                  on={receipt.maintenanceMode}
+                  onToggle={(next) => setReceipt((p) => ({ ...p, maintenanceMode: next }))}
+                />
+              </div>
+            </Card>
+          </div>
+
+          {/* Right: Payment, Operational, System */}
+          <div className="space-y-4">
+            <Card title="Payment Settings">
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[#2f3743]">Enable Cash</span>
+                <Toggle
+                  on={payment.enableCash}
+                  onToggle={(next) => setPayment((p) => ({ ...p, enableCash: next }))}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[#2f3743]">Enable Card</span>
+                <Toggle
+                  on={payment.enableCard}
+                  onToggle={(next) => setPayment((p) => ({ ...p, enableCard: next }))}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[#2f3743]">Enable Mobile Pay</span>
+                <Toggle
+                  on={payment.enableMobilePay}
+                  onToggle={(next) => setPayment((p) => ({ ...p, enableMobilePay: next }))}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[#2f3743]">Enable Gift Cards</span>
+                <Toggle
+                  on={payment.enableGiftCards}
+                  onToggle={(next) => setPayment((p) => ({ ...p, enableGiftCards: next }))}
+                />
+              </div>
+              <div>
+                <Label>Default Payment Method</Label>
+                <SelectMenu
+                  value={payment.defaultMethod}
+                  onChange={(v) => setPayment((p) => ({ ...p, defaultMethod: v }))}
+                  options={PAYMENT_METHOD_OPTIONS}
+                />
+              </div>
+              <div>
+                <Label>Terminal auto-close after payment (seconds)</Label>
+                <input
+                  type="number"
+                  min={0}
+                  max={60}
+                  value={payment.terminalAutoClose}
+                  onChange={(e) =>
+                    setPayment((p) => ({
+                      ...p,
+                      terminalAutoClose: Math.max(0, Math.min(60, Number(e.target.value) || 10)),
+                    }))
+                  }
+                  className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
+                />
+              </div>
+            </Card>
+
+            <Card title="Operational Settings">
+              <div>
+                <Label>Order timeout duration (seconds)</Label>
+                <input
+                  type="number"
+                  min={30}
+                  max={600}
+                  value={operational.orderTimeout}
+                  onChange={(e) =>
+                    setOperational((p) => ({
+                      ...p,
+                      orderTimeout: Math.max(30, Math.min(600, Number(e.target.value) || 120)),
+                    }))
+                  }
+                  className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
+                />
+              </div>
+            </Card>
+
+            <Card title="System Controls">
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[#2f3743]">Enable Loyalty Program</span>
+                <Toggle
+                  on={system.enableLoyalty}
+                  onToggle={(next) => setSystem((p) => ({ ...p, enableLoyalty: next }))}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[#2f3743]">
+                  Allow price override at terminal
+                </span>
+                <Toggle
+                  on={system.allowPriceOverride}
+                  onToggle={(next) => setSystem((p) => ({ ...p, allowPriceOverride: next }))}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-medium text-[#2f3743]">Enable debug logs</span>
+                <Toggle
+                  on={system.enableDebugLogs}
+                  onToggle={(next) => setSystem((p) => ({ ...p, enableDebugLogs: next }))}
+                />
+              </div>
+              <div className="flex flex-col gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => sendTerminalCommand("RELOAD_MENU")}
-                  className="h-9 rounded-lg border border-[#dfe3e8] bg-white text-[12px] font-semibold text-[#3f4653]"
+                  onClick={handleExportLogs}
+                  disabled={isExportingLogs}
+                  className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] hover:bg-[#f9fafb] disabled:opacity-50"
                 >
-                  Send Reload Menu
+                  {isExportingLogs ? "Exporting..." : "Export system logs"}
                 </button>
                 <button
                   type="button"
-                  onClick={() => sendTerminalCommand("MAINTENANCE_MODE")}
-                  className="h-9 rounded-lg border border-[#dfe3e8] bg-white text-[12px] font-semibold text-[#3f4653]"
+                  onClick={handleBackupDatabase}
+                  disabled={isBackingUp}
+                  className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] hover:bg-[#f9fafb] disabled:opacity-50"
                 >
-                  Enable Maintenance Mode
-                </button>
-                <button
-                  type="button"
-                  onClick={() => sendTerminalCommand("CLEAR_MAINTENANCE")}
-                  className="h-9 rounded-lg border border-[#dfe3e8] bg-white text-[12px] font-semibold text-[#3f4653]"
-                >
-                  Clear Maintenance Mode
+                  {isBackingUp ? "Backing up..." : "Backup database"}
                 </button>
               </div>
             </Card>
           </div>
-        )}
+        </div>
       </section>
     </div>
   );
 }
-

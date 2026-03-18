@@ -13,17 +13,26 @@ import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api";
 import type { components } from "@/types/orderzilla-openapi";
 
+const EMPTY_VALUE = "—";
+
+function toDisplayValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
+
 type ApiLocation = components["schemas"]["Location"];
 
 type LocationRow = {
   id: string;
   name: string;
   address: string;
+  zip: string;
   city: string;
   country: string;
   timezone: string;
-  terminals: number;
-  ordersToday: number;
+  terminals: number | null;
+  ordersToday: number | null;
   active: boolean;
 };
 
@@ -98,19 +107,21 @@ export default function LocationsPage() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createAddress, setCreateAddress] = useState("");
+  const [createZip, setCreateZip] = useState("");
   const [createCity, setCreateCity] = useState("");
   const [createCountry, setCreateCountry] = useState("CH");
   const [createTimezone, setCreateTimezone] = useState("Europe/Zurich");
 
-  const mapLocation = (location: ApiLocation): LocationRow => ({
-    id: location.id ?? crypto.randomUUID(),
-    name: location.name ?? "Unnamed",
-    address: location.address ?? "",
-    city: location.city ?? "-",
-    country: location.country ?? "CH",
-    timezone: location.timezone ?? "Europe/Zurich",
-    terminals: location.terminal_count ?? 0,
-    ordersToday: 0,
+  const mapLocation = (location: ApiLocation & { zip?: string | null; orders_today?: number | null }): LocationRow => ({
+    id: toDisplayValue(location.id, "") || crypto.randomUUID(),
+    name: toDisplayValue(location.name, EMPTY_VALUE),
+    address: toDisplayValue(location.address, ""),
+    zip: toDisplayValue(location.zip, ""),
+    city: toDisplayValue(location.city, EMPTY_VALUE),
+    country: toDisplayValue(location.country, "CH"),
+    timezone: toDisplayValue(location.timezone, "Europe/Zurich"),
+    terminals: typeof location.terminal_count === "number" ? location.terminal_count : null,
+    ordersToday: typeof location.orders_today === "number" ? location.orders_today : null,
     active: location.is_active ?? true,
   });
 
@@ -173,11 +184,12 @@ export default function LocationsPage() {
       body: {
         name: next.name,
         address: next.address || undefined,
-        city: next.city === "-" ? undefined : next.city,
+        zip: next.zip || undefined,
+        city: next.city === EMPTY_VALUE ? undefined : next.city,
         country: next.country,
         timezone: next.timezone,
         is_active: next.active,
-      } as never,
+      },
     });
   };
 
@@ -252,6 +264,7 @@ export default function LocationsPage() {
   const resetCreateForm = () => {
     setCreateName("");
     setCreateAddress("");
+    setCreateZip("");
     setCreateCity("");
     setCreateCountry("CH");
     setCreateTimezone("Europe/Zurich");
@@ -272,6 +285,7 @@ export default function LocationsPage() {
         body: {
           name: trimmedName,
           address: createAddress.trim() || undefined,
+          zip: createZip.trim() || undefined,
           city: createCity.trim() || undefined,
           country: createCountry.trim() || "CH",
           timezone: createTimezone.trim() || "Europe/Zurich",
@@ -304,6 +318,7 @@ export default function LocationsPage() {
       const header = parseCsvLine(lines[0]).map((h) => h.toLowerCase());
       const idxName = header.indexOf("name");
       const idxAddress = header.indexOf("address");
+      const idxZip = header.indexOf("zip");
       const idxCity = header.indexOf("city");
       const idxCountry = header.indexOf("country");
       const idxTimezone = header.indexOf("timezone");
@@ -316,6 +331,7 @@ export default function LocationsPage() {
         return {
           name: (cols[idxName] ?? "").trim(),
           address: idxAddress >= 0 ? cols[idxAddress] || undefined : undefined,
+          zip: idxZip >= 0 ? cols[idxZip] || undefined : undefined,
           city: idxCity >= 0 ? cols[idxCity] || undefined : undefined,
           country: idxCountry >= 0 ? cols[idxCountry] || "CH" : "CH",
           timezone: idxTimezone >= 0 ? cols[idxTimezone] || "Europe/Zurich" : "Europe/Zurich",
@@ -419,7 +435,7 @@ export default function LocationsPage() {
           </div>
         ) : (
           <div className="mt-4 overflow-x-auto rounded-xl border border-[#e4e6ea]">
-            <table className="w-full min-w-[980px]">
+            <table className="w-full min-w-[1020px]">
               <thead className="bg-[#f8f9fb] border-b border-[#e9ebef]">
                 <tr className="text-[12px] text-[#6e7785] text-left">
                   <th className="px-3 py-2">
@@ -438,6 +454,7 @@ export default function LocationsPage() {
                   </th>
                   <th className="px-2 py-2 font-semibold">Location</th>
                   <th className="px-2 py-2 font-semibold">City</th>
+                  <th className="px-2 py-2 font-semibold">ZIP</th>
                   <th className="px-2 py-2 font-semibold">Country</th>
                   <th className="px-2 py-2 font-semibold">Terminals</th>
                   <th className="px-2 py-2 font-semibold">Orders Today</th>
@@ -448,7 +465,7 @@ export default function LocationsPage() {
               <tbody>
                 {paginatedRows.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center text-[13px] text-[#717c8e]">
+                    <td colSpan={9} className="px-4 py-10 text-center text-[13px] text-[#717c8e]">
                       No locations found.
                     </td>
                   </tr>
@@ -474,9 +491,10 @@ export default function LocationsPage() {
                         </div>
                       </td>
                       <td className="px-2 py-3 text-[#3e4653]">{location.city}</td>
+                      <td className="px-2 py-3 text-[#3e4653]">{location.zip || EMPTY_VALUE}</td>
                       <td className="px-2 py-3 text-[#3e4653]">{location.country}</td>
-                      <td className="px-2 py-3 text-[#3e4653]">{location.terminals}</td>
-                      <td className="px-2 py-3 text-[#3e4653]">{location.ordersToday}</td>
+                      <td className="px-2 py-3 text-[#3e4653]">{location.terminals ?? EMPTY_VALUE}</td>
+                      <td className="px-2 py-3 text-[#3e4653]">{location.ordersToday ?? EMPTY_VALUE}</td>
                       <td className="px-2 py-3">
                         <span
                           className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
@@ -610,10 +628,10 @@ export default function LocationsPage() {
               </p>
               <p className="mt-3 font-semibold text-[#2f3743]">Optional</p>
               <p className="mt-1 text-[#4f5a69]">
-                <code>address</code>, <code>city</code>, <code>country</code>, <code>timezone</code>
+                <code>address</code>, <code>zip</code>, <code>city</code>, <code>country</code>, <code>timezone</code>
               </p>
               <p className="mt-3 font-semibold text-[#2f3743]">Example header</p>
-              <p className="mt-1 text-[#4f5a69] break-all">name,address,city,country,timezone</p>
+              <p className="mt-1 text-[#4f5a69] break-all">name,address,zip,city,country,timezone</p>
             </div>
 
             <div className="mt-5 flex items-center justify-end gap-2">
@@ -702,6 +720,16 @@ export default function LocationsPage() {
                   onChange={(e) => setCreateAddress(e.target.value)}
                   className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
                   placeholder="Street and number"
+                />
+              </div>
+              <div>
+                <label className="text-[13px] font-semibold text-[#4e5664]">ZIP</label>
+                <input
+                  autoComplete="off"
+                  value={createZip}
+                  onChange={(e) => setCreateZip(e.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px]"
+                  placeholder="e.g. 8001"
                 />
               </div>
               <div>

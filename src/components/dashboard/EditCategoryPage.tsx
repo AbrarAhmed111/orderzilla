@@ -1,14 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Trash2, UploadCloud } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
+import CategoryForm, { type CategoryFormValues } from "@/components/dashboard/CategoryForm";
 import { orderzillaApi } from "@/lib/api";
-import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
-import { validateField } from "@/lib/validation";
 
 type EditCategoryPageProps = {
   id: string;
@@ -16,32 +15,92 @@ type EditCategoryPageProps = {
 
 export default function EditCategoryPage({ id }: EditCategoryPageProps) {
   const router = useRouter();
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [sortOrder, setSortOrder] = useState(0);
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imageUrl, setImageUrl] = useState("");
-  const [imagePreviewUrl, setImagePreviewUrl] = useState("");
   const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState("");
+  const [initialData, setInitialData] = useState<{
+    name: string;
+    description: string;
+    sortOrder: number;
+    imageUrl: string;
+    slug?: string;
+    parentId?: string;
+    showInPos?: boolean;
+    showInKiosk?: boolean;
+    highlighted?: boolean;
+    availability?: "always" | "scheduled";
+    days?: number[];
+    timeStart?: string;
+    timeEnd?: string;
+    locationIds?: string[];
+    metaTitle?: string;
+    metaDescription?: string;
+  } | null>(null);
 
   const fetchData = async () => {
     try {
       setIsLoading(true);
       setError("");
       const category = await orderzillaApi.dashboard.categories.byId(id);
-
-      setName(category?.name ?? "");
-      const trans = category?.translations as Record<string, { description?: string }> | undefined;
-      setDescription(trans?.de?.description ?? trans?.en?.description ?? "");
-      setSortOrder(category?.sort_order ?? 0);
-      setImageUrl(category?.image_url ?? "");
+      const trans = category?.translations as Record<
+        string,
+        { description?: string; name?: string }
+      > | undefined;
+      const cat = category as {
+        name?: string | null;
+        sort_order?: number | null;
+        image_url?: string | null;
+        slug?: string | null;
+        parent_id?: string | null;
+        show_in_pos?: boolean | null;
+        show_in_kiosk?: boolean | null;
+        highlighted?: boolean | null;
+        availability?: string | null;
+        availability_days?: (string | number)[] | null;
+        availability_start?: string | null;
+        availability_end?: string | null;
+        location_ids?: string[] | null;
+        meta_title?: string | null;
+        meta_description?: string | null;
+      };
+      const rawDays = Array.isArray(cat?.availability_days) ? cat.availability_days : [];
+      const days = rawDays.length > 0
+        ? rawDays.map((d) => {
+            if (typeof d === "number" && d >= 0 && d <= 6) {
+              return d === 0 ? 6 : d - 1;
+            }
+            const map: Record<string, number> = { mon: 0, tue: 1, wed: 2, thu: 3, fri: 4, sat: 5, sun: 6 };
+            const key = typeof d === "string" ? d.toLowerCase().slice(0, 3) : "";
+            return map[key] ?? -1;
+          }).filter((i) => i >= 0)
+        : [0, 1, 2, 3, 4, 5, 6];
+      const toTimeInput = (hms: string | null | undefined, defaultVal: string) => {
+        if (!hms || typeof hms !== "string") return defaultVal;
+        const parts = hms.trim().split(":");
+        const h = parts[0] ?? "0";
+        const m = parts[1] ?? "0";
+        return `${h.padStart(2, "0")}:${m.padStart(2, "0")}`;
+      };
+      setInitialData({
+        name: typeof cat?.name === "string" ? cat.name : "",
+        description: trans?.de?.description ?? trans?.en?.description ?? "",
+        sortOrder: typeof cat?.sort_order === "number" ? cat.sort_order : 0,
+        imageUrl: typeof cat?.image_url === "string" ? cat.image_url : "",
+        slug: typeof cat?.slug === "string" ? cat.slug : undefined,
+        parentId: typeof cat?.parent_id === "string" ? cat.parent_id : undefined,
+        showInPos: cat?.show_in_pos ?? true,
+        showInKiosk: cat?.show_in_kiosk ?? true,
+        highlighted: cat?.highlighted ?? false,
+        availability: cat?.availability === "scheduled" ? "scheduled" : "always",
+        days: days.length > 0 ? [...new Set(days)].sort((a, b) => a - b) : [0, 1, 2, 3, 4, 5, 6],
+        timeStart: toTimeInput(cat?.availability_start, "00:00"),
+        timeEnd: toTimeInput(cat?.availability_end, "23:59"),
+        locationIds: Array.isArray(cat?.location_ids) ? cat.location_ids : [],
+        metaTitle: typeof cat?.meta_title === "string" ? cat.meta_title : "",
+        metaDescription: typeof cat?.meta_description === "string" ? cat.meta_description : "",
+      });
     } catch {
       setError("Failed to load category.");
+      setInitialData(null);
     } finally {
       setIsLoading(false);
     }
@@ -51,39 +110,39 @@ export default function EditCategoryPage({ id }: EditCategoryPageProps) {
     fetchData();
   }, [id]);
 
-  useEffect(() => {
-    if (!imageFile) {
-      setImagePreviewUrl("");
-      return;
-    }
-    const objectUrl = URL.createObjectURL(imageFile);
-    setImagePreviewUrl(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [imageFile]);
-
-  const nameError = validateField(name, [
-    { type: "required", message: "Category name is required." },
-    { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
-  ]);
-  const isFormValid = !nameError;
-
-  const handleSave = async () => {
-    if (!isFormValid) return;
-    const trimmedName = name.trim();
-
+  const handleSave = async (values: CategoryFormValues, imageFile: File | null) => {
     try {
-      setIsSaving(true);
       await orderzillaApi.dashboard.categories.update(id, {
         body: {
-          name: trimmedName,
-          sort_order: Number.isFinite(sortOrder) ? sortOrder : 0,
-          translations: description
+          name: values.name,
+          slug: values.slug.trim() || undefined,
+          sort_order: Number.isFinite(values.sortOrder) ? values.sortOrder : 0,
+          translations: values.description
             ? {
-                de: { name: trimmedName, description },
-                en: { name: trimmedName, description },
+                de: { name: values.name, description: values.description },
+                en: { name: values.name, description: values.description },
               }
             : undefined,
-        } as never,
+          show_in_pos: values.showInPos,
+          show_in_kiosk: values.showInKiosk,
+          highlighted: values.highlighted,
+          availability: values.availability,
+          availability_days:
+            values.availability === "scheduled"
+              ? values.days.map((d) => (d === 6 ? 0 : d + 1))
+              : undefined,
+          availability_start:
+            values.availability === "scheduled" && values.timeStart
+              ? `${values.timeStart}:00`
+              : undefined,
+          availability_end:
+            values.availability === "scheduled" && values.timeEnd
+              ? `${values.timeEnd}:00`
+              : undefined,
+          location_ids: values.locationIds.length > 0 ? values.locationIds : undefined,
+          meta_title: values.metaTitle.trim() || undefined,
+          meta_description: values.metaDescription.trim() || undefined,
+        },
       });
 
       if (imageFile) {
@@ -98,22 +157,16 @@ export default function EditCategoryPage({ id }: EditCategoryPageProps) {
       router.push("/dashboard/categories");
     } catch {
       toast.error("Failed to update category.");
-    } finally {
-      setIsSaving(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!window.confirm("Delete this category?")) return;
     try {
-      setIsDeleting(true);
       await orderzillaApi.dashboard.categories.remove(id);
       toast.success("Category deleted.");
       router.push("/dashboard/categories");
     } catch {
       toast.error("Failed to delete category.");
-    } finally {
-      setIsDeleting(false);
     }
   };
 
@@ -125,146 +178,61 @@ export default function EditCategoryPage({ id }: EditCategoryPageProps) {
     );
   }
 
-  return (
-    <div className="p-3 sm:p-4">
-      <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-        {error ? (
-          <div className="mb-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
+  if (error && !initialData) {
+    return (
+      <div className="p-3 sm:p-4">
+        <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+          <Link
+            href="/dashboard/categories"
+            className="inline-flex items-center gap-1.5 text-[14px] text-[#616a78] hover:text-[#2f3743]"
+          >
+            <ArrowLeft size={16} />
+            Back to Categories
+          </Link>
+          <div className="mt-4 rounded-lg border border-[#fef3c7] bg-[#fffbeb] px-3 py-2 text-[12px] text-[#92400e]">
             {error}{" "}
             <button type="button" onClick={fetchData} className="font-semibold underline">
               Retry
             </button>
           </div>
-        ) : null}
+        </section>
+      </div>
+    );
+  }
 
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div>
-            <Link href="/dashboard/categories" className="text-[13px] text-[#67707d]">
-              ← Back to Categories
-            </Link>
-            <h1 className="text-[28px] sm:text-[36px] lg:text-[42px] leading-none font-extrabold text-[#1a2029] mt-1">
-              Edit Category
-            </h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => router.push("/dashboard/categories")}
-              className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855]"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={isSaving || !isFormValid}
-              className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[14px] font-semibold text-[#1d2512] disabled:opacity-50"
-            >
-              {isSaving ? "Saving..." : "Save Category"}
-            </button>
-            <button
-              type="button"
-              onClick={handleDelete}
-              disabled={isDeleting}
-              className="h-10 rounded-lg border border-[#efc3c3] bg-white px-4 inline-flex items-center gap-2 text-[14px] font-semibold text-[#cf4a4a] disabled:opacity-50"
-            >
-              <Trash2 size={14} />
-              {isDeleting ? "Deleting..." : "Delete"}
-            </button>
-          </div>
+  if (!initialData) {
+    return (
+      <div className="p-3 sm:p-4">
+        <div className="rounded-2xl border border-[#e5e7eb] bg-white p-4">
+          <TableSkeleton rows={6} columns={3} />
         </div>
+      </div>
+    );
+  }
 
-        <div className="mt-4">
-          <div className="space-y-3">
-            <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-              <h2 className="text-[30px] font-bold text-[#1a212c]">Basic Information</h2>
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[14px] font-semibold text-[#363f4c]">Category Name</label>
-                  <ValidatedInput
-                    value={name}
-                    onChange={setName}
-                    rules={[
-                      { type: "required", message: "Category name is required." },
-                      { type: "minLength", value: 2, message: "Name must be at least 2 characters." },
-                    ]}
-                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none focus:border-[#c0eb1a]"
-                    placeholder="e.g., Burgers"
-                  />
-                </div>
-                <div>
-                  <label className="text-[14px] font-semibold text-[#363f4c]">Display Order</label>
-                  <input
-                    type="number"
-                    className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none"
-                    value={sortOrder}
-                    onChange={(e) => setSortOrder(Number(e.target.value || 0))}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-3">
-                <label className="text-[14px] font-semibold text-[#363f4c]">Description</label>
-                <textarea
-                  className="mt-1 w-full rounded-lg border border-[#dfe3e8] px-3 py-2 text-[14px] outline-none"
-                  rows={3}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Describe the category..."
-                />
-              </div>
-            </article>
-
-            <article className="rounded-xl border border-[#e4e6ea] bg-white p-3">
-              <h2 className="text-[30px] font-bold text-[#1a212c]">Category Image</h2>
-              <div className="mt-2 h-28 w-28 overflow-hidden rounded-lg border border-[#dfe3e8] bg-[#f6f8fa]">
-                {imagePreviewUrl || imageUrl ? (
-                  <img
-                    src={imagePreviewUrl || imageUrl}
-                    alt="Category preview"
-                    className="h-full w-full object-cover"
-                  />
-                ) : null}
-              </div>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="mt-2 h-28 w-full rounded-lg border border-dashed border-[#dfe3e8] bg-[#fafbfc] flex flex-col items-center justify-center text-[#7a8392]"
-              >
-                <UploadCloud size={22} />
-                <p className="text-[14px] mt-1">
-                  Drag and drop an image here, or click to browse.
-                </p>
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
-                className="hidden"
-              />
-              {(imageFile || imageUrl) && (
-                <p className="mt-2 text-[12px] text-[#6e7785]">
-                  Selected: {imageFile?.name ?? imageUrl}
-                </p>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  setImageFile(null);
-                  setImagePreviewUrl("");
-                  if (fileInputRef.current) fileInputRef.current.value = "";
-                }}
-                className="mt-2 h-9 rounded-lg border border-[#efc3c3] bg-white px-4 text-[12px] font-semibold text-[#cf4a4a]"
-              >
-                Remove selected new image
-              </button>
-            </article>
-          </div>
-
-        </div>
-      </section>
-    </div>
+  return (
+    <CategoryForm
+      mode="edit"
+      id={id}
+      initialName={initialData.name}
+      initialDescription={initialData.description}
+      initialSortOrder={initialData.sortOrder}
+      initialImageUrl={initialData.imageUrl}
+      initialSlug={initialData.slug}
+      initialParentId={initialData.parentId}
+      initialShowInPos={initialData.showInPos}
+      initialShowInKiosk={initialData.showInKiosk}
+      initialHighlighted={initialData.highlighted}
+      initialAvailability={initialData.availability}
+      initialDays={initialData.days}
+      initialTimeStart={initialData.timeStart}
+      initialTimeEnd={initialData.timeEnd}
+      initialLocationIds={initialData.locationIds}
+      initialMetaTitle={initialData.metaTitle}
+      initialMetaDescription={initialData.metaDescription}
+      onSave={handleSave}
+      onDelete={handleDelete}
+      onCancel={() => router.push("/dashboard/categories")}
+    />
   );
 }
-

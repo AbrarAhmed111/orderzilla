@@ -17,11 +17,18 @@ import {
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api";
 
-type MetricCard = { title: string; value: string; change: string };
+type MetricCard = {
+  title: string;
+  value: string;
+  change: string;
+  changeUp?: boolean | null;
+  chartData: { time: string; value: number }[];
+  chartData2?: { time: string; value: number }[];
+};
 type RevenuePoint = { time: string; value: number };
 type TerminalPoint = { id: string; value: number };
-type ProductPoint = { name: string; amount: string; progress: number };
-type RecentOrder = { id: string; items: number; total: string; status: string };
+type ProductPoint = { id?: string; name: string; amount: string; progress: number; imageUrl?: string | null };
+type RecentOrder = { id: string; rowKey: string; items: number; total: string; status: string };
 
 function statusClass(status: string) {
   if (status === "Completed") {
@@ -37,6 +44,20 @@ function statusClass(status: string) {
 }
 
 type TimelineFilter = "today" | "last7" | "last30" | "thisMonth" | "all";
+
+function getNum(obj: Record<string, unknown> | null | undefined, key: string): number {
+  if (!obj || typeof obj !== "object") return 0;
+  const snake = key.replace(/([A-Z])/g, (m) => "_" + m.toLowerCase());
+  const v = obj[key] ?? obj[snake];
+  return typeof v === "number" ? v : 0;
+}
+
+function getStr(obj: Record<string, unknown> | null | undefined, key: string): string {
+  if (!obj || typeof obj !== "object") return "";
+  const snake = key.replace(/([A-Z])/g, (m) => "_" + m.toLowerCase());
+  const v = obj[key] ?? obj[snake];
+  return typeof v === "string" ? v : "";
+}
 
 function formatAsDate(value: Date) {
   return value.toISOString().slice(0, 10);
@@ -96,9 +117,10 @@ export default function Overview() {
           date_to: dateRange.date_to,
           location_id: locationId,
         };
-        const [overview, byTerminal, top, hourly, orderList] = await Promise.all([
+        const results = await Promise.allSettled([
           orderzillaApi.dashboard.kpi.overview({ query: sharedQuery }),
           orderzillaApi.dashboard.kpi.byTerminal({ query: sharedQuery }),
+          orderzillaApi.dashboard.kpi.byDay({ query: sharedQuery }),
           orderzillaApi.dashboard.kpi.topProducts({ query: { ...sharedQuery, limit: 5 } }),
           orderzillaApi.dashboard.kpi.hourly({ query: sharedQuery }),
           orderzillaApi.dashboard.orders.list({
@@ -106,37 +128,153 @@ export default function Overview() {
           }),
         ]);
 
+        const overview = results[0].status === "fulfilled" ? results[0].value : null;
+        const byTerminal = results[1].status === "fulfilled" ? results[1].value : null;
+        const byDay = results[2].status === "fulfilled" ? results[2].value : null;
+        const top = results[3].status === "fulfilled" ? results[3].value : null;
+        const hourly = results[4].status === "fulfilled" ? results[4].value : null;
+        const orderList = results[5].status === "fulfilled" ? results[5].value : null;
+
+        const failedCount = results.filter((r) => r.status === "rejected").length;
+        if (failedCount === results.length) {
+          throw new Error("All KPI requests failed.");
+        }
+
+        const byDayObj = byDay as Record<string, unknown> | null;
+        const daysRaw = Array.isArray(byDayObj)
+          ? byDayObj
+          : (byDayObj?.days ?? byDayObj?.data ?? []) as Array<Record<string, unknown>>;
+        const days = Array.isArray(daysRaw) ? daysRaw : [];
+        const sortedDays = [...days].sort(
+          (a, b) => String(getStr(a, "day")).localeCompare(String(getStr(b, "day"))),
+        );
+
+        const toChartData = (
+          getValue: (d: Record<string, unknown>) => number,
+        ): { time: string; value: number }[] =>
+          sortedDays.map((d) => ({
+            time: (() => {
+              const dayStr = getStr(d, "day");
+              if (!dayStr) return "";
+              try {
+                return new Date(dayStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+              } catch {
+                return dayStr;
+              }
+            })(),
+            value: getValue(d),
+          }));
+
+        const calcChange = (data: { value: number }[]): { change: string; up: boolean | null } => {
+          if (data.length < 2) return { change: "→ 0.0%", up: null };
+          const mid = Math.floor(data.length / 2);
+          const firstHalf = data.slice(0, mid).reduce((s, d) => s + d.value, 0) / Math.max(1, mid);
+          const secondHalf = data.slice(mid).reduce((s, d) => s + d.value, 0) / Math.max(1, data.length - mid);
+          if (firstHalf === 0) return { change: "→ 0.0%", up: null };
+          const pct = ((secondHalf - firstHalf) / firstHalf) * 100;
+          const up = pct > 0;
+          const arrow = pct > 0 ? "↑" : pct < 0 ? "↓" : "→";
+          return { change: `${arrow} ${Math.abs(pct).toFixed(1)}%`, up: pct !== 0 ? up : null };
+        };
+
+        const overviewObj = overview as Record<string, unknown> | null;
+        const revenueData = toChartData((d) => getNum(d, "revenueGross"));
+        const ordersData = toChartData((d) => getNum(d, "orderCount"));
+        const avgBasketData = toChartData((d) => getNum(d, "avgBasket"));
+        const taxData = toChartData((d) => getNum(d, "revenueGross") - getNum(d, "revenueNet"));
+        const indoorData = toChartData((d) => getNum(d, "indoorCount"));
+        const takeawayData = toChartData((d) => getNum(d, "takeawayCount"));
+        const indoorTakeawayData = sortedDays.map((d, i) => ({
+          time: (() => {
+            const dayStr = getStr(d, "day");
+            if (!dayStr) return "";
+            try {
+              return new Date(dayStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+            } catch {
+              return dayStr;
+            }
+          })(),
+          indoor: indoorData[i]?.value ?? 0,
+          takeaway: takeawayData[i]?.value ?? 0,
+        }));
+
+        const indoorCount = getNum(overviewObj, "indoorCount");
+        const takeawayCount = getNum(overviewObj, "takeawayCount");
+        const totalOrders = indoorCount + takeawayCount;
+        const indoorPct = totalOrders > 0 ? Math.round((indoorCount / totalOrders) * 100) : 0;
+        const takeawayPct = totalOrders > 0 ? Math.round((takeawayCount / totalOrders) * 100) : 0;
+        const indoorChange = indoorData.length >= 2 ? calcChange(indoorData) : { change: "→ 0%", up: null };
+        const takeawayChange = takeawayData.length >= 2 ? calcChange(takeawayData) : { change: "→ 0%", up: null };
+
+        const revCh = calcChange(revenueData);
+        const ordCh = calcChange(ordersData);
+        const avgCh = calcChange(avgBasketData);
+        const taxCh = calcChange(taxData);
+
         setCards([
-          { title: "REVENUE (GROSS)", value: `$${overview?.revenueGross ?? 0}`, change: "Live" },
-          { title: "ORDERS", value: `${overview?.orderCount ?? 0}`, change: "Live" },
-          { title: "AVG. BASKET", value: `$${overview?.avgBasket ?? 0}`, change: "Live" },
-          { title: "VAT TOTAL", value: `$${overview?.taxTotal ?? 0}`, change: "Live" },
+          {
+            title: "REVENUE (GROSS)",
+            value: `$${getNum(overviewObj, "revenueGross")}`,
+            change: revCh.change,
+            changeUp: revCh.up,
+            chartData: revenueData,
+          },
+          {
+            title: "ORDERS",
+            value: `${getNum(overviewObj, "orderCount")}`,
+            change: ordCh.change,
+            changeUp: ordCh.up,
+            chartData: ordersData,
+          },
+          {
+            title: "AVG. BASKET",
+            value: `$${getNum(overviewObj, "avgBasket")}`,
+            change: avgCh.change,
+            changeUp: avgCh.up,
+            chartData: avgBasketData,
+          },
+          {
+            title: "VAT TOTAL",
+            value: `$${getNum(overviewObj, "taxTotal")}`,
+            change: taxCh.change,
+            changeUp: taxCh.up,
+            chartData: taxData,
+          },
           {
             title: "INDOOR / TAKEAWAY",
-            value: `${overview?.indoorCount ?? 0} / ${overview?.takeawayCount ?? 0}`,
-            change: "Live",
+            value: `${indoorPct}% / ${takeawayPct}%`,
+            change: `${indoorChange.change} / ${takeawayChange.change}`,
+            changeUp: null,
+            chartData: indoorTakeawayData.map((d) => ({ time: d.time, value: d.indoor })),
+            chartData2: indoorTakeawayData.map((d) => ({ time: d.time, value: d.takeaway })),
           },
         ]);
 
+        const byTerminalObj = byTerminal as Record<string, unknown> | null;
+        const terminalsRaw = Array.isArray(byTerminalObj)
+          ? byTerminalObj
+          : (byTerminalObj?.terminals ?? byTerminalObj?.data ?? []) as Array<Record<string, unknown>>;
+        const terminals = Array.isArray(terminalsRaw) ? terminalsRaw : [];
         setTerminalChart(
-          (
-            (byTerminal as {
-              terminals?: Array<{ terminalCode?: string; terminalName?: string; revenueGross?: number }>;
-            })?.terminals ?? []
-          ).map((terminal) => ({
-            id: terminal.terminalCode ?? terminal.terminalName ?? "-",
-            value: terminal.revenueGross ?? 0,
+          terminals.map((t) => ({
+            id: (t.terminalCode ?? t.terminal_code ?? t.terminalName ?? t.terminal_name ?? "-") as string,
+            value: getNum(t, "revenueGross"),
           })),
         );
 
+        const hourlyObj = hourly as Record<string, unknown> | null;
+        const hourlyRaw = Array.isArray(hourlyObj)
+          ? hourlyObj
+          : (hourlyObj?.hourly ?? hourlyObj?.data ?? []) as Array<Record<string, unknown>>;
+        const hourlyArr = Array.isArray(hourlyRaw) ? hourlyRaw : [];
         setRevenue(
           (() => {
-            const source =
-              (hourly as { hourly?: Array<{ hour?: number; revenueGross?: number }> })?.hourly ?? [];
             const byHour = new Map<number, number>();
-            source.forEach((row) => {
-              if (typeof row.hour !== "number") return;
-              byHour.set(row.hour, (byHour.get(row.hour) ?? 0) + (row.revenueGross ?? 0));
+            hourlyArr.forEach((row) => {
+              const h = getNum(row, "hour");
+              if (h >= 0 && h <= 23) {
+                byHour.set(h, (byHour.get(h) ?? 0) + getNum(row, "revenueGross"));
+              }
             });
             return Array.from(byHour.entries())
               .sort((a, b) => a[0] - b[0])
@@ -147,40 +285,74 @@ export default function Overview() {
           })(),
         );
 
-        setProducts(
-          (() => {
-            const source =
-              (top as { products?: Array<{ productName?: string; revenueGross?: number }> })?.products ?? [];
-            const maxRevenue = Math.max(
-              1,
-              ...source.map((item) => item.revenueGross ?? 0),
-            );
-            const mapped = source.map((item) => ({
-              name: item.productName ?? "Product",
-              amount: `$${item.revenueGross ?? 0}`,
-              progress: Math.round(((item.revenueGross ?? 0) / maxRevenue) * 100),
-            }));
-            return mapped;
-          })(),
+        const topObj = top as Record<string, unknown> | null;
+        const productsRaw = Array.isArray(topObj)
+          ? topObj
+          : (topObj?.products ?? topObj?.data ?? []) as Array<Record<string, unknown>>;
+        const source = Array.isArray(productsRaw) ? productsRaw : [];
+        const maxRevenue = Math.max(
+          1,
+          ...source.map((item) => getNum(item, "revenueGross")),
         );
+        const mapped = source.map((item) => ({
+          id: (item.productId ?? item.product_id) as string | undefined,
+          name: (item.productName ?? item.product_name ?? "Product") as string,
+          amount: `$${getNum(item, "revenueGross")}`,
+          progress: Math.round((getNum(item, "revenueGross") / maxRevenue) * 100),
+          imageUrl: null as string | null | undefined,
+        }));
+        setProducts(mapped);
 
+        // Fetch product images for top products
+        const ids = source.map((p) => p.productId ?? p.product_id).filter(Boolean) as string[];
+        if (ids.length > 0) {
+          Promise.all(ids.map((id) => orderzillaApi.dashboard.products.byId(id)))
+            .then((productDetails) => {
+              setProducts((prev) =>
+                prev.map((p, i) => ({
+                  ...p,
+                  imageUrl: (productDetails[i] as { image_url?: string | null })?.image_url ?? null,
+                })),
+              );
+            })
+            .catch(() => {});
+        }
+
+        const orderListObj = orderList as Record<string, unknown> | null;
+        const ordersRaw = Array.isArray(orderListObj)
+          ? orderListObj
+          : (orderListObj?.orders ?? orderListObj?.data ?? []) as Array<Record<string, unknown>>;
+        const ordersArr = Array.isArray(ordersRaw) ? ordersRaw : [];
         setOrders(
-          (orderList?.orders ?? []).map((order) => ({
-            id: order.order_number ? `#${order.order_number}` : "#-",
-            items: 1,
-            total: order.total_gross ? `$${order.total_gross}` : "$0.00",
-            status:
-              order.status === "COMPLETED"
-                ? "Completed"
-                : order.status === "READY"
-                  ? "Ready"
-                  : order.status === "PREPARING"
-                    ? "Preparing"
-                    : "Pending",
-          })),
+          ordersArr.map((order, index) => {
+            const orderNum = order.order_number ?? order.orderNumber;
+            const total = order.total_gross ?? order.totalGross;
+            const status = (order.status as string) ?? "PENDING";
+            const displayId = orderNum ? `#${orderNum}` : "#-";
+            const rowKey = String(order.id ?? order.order_id ?? `order-${index}`);
+            return {
+              id: displayId,
+              rowKey,
+              items: 1,
+              total: total != null ? `$${total}` : "$0.00",
+              status:
+                status === "COMPLETED"
+                  ? "Completed"
+                  : status === "READY"
+                    ? "Ready"
+                    : status === "PREPARING"
+                      ? "Preparing"
+                      : "Pending",
+            };
+          }),
         );
-      } catch {
-        setError("Failed to load dashboard data.");
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : "Failed to load dashboard data.";
+        setError(msg);
+        if (typeof console !== "undefined" && console.error) {
+          console.error("[Overview] fetch error:", err);
+        }
       } finally {
         setIsLoading(false);
       }
@@ -223,12 +395,76 @@ export default function Overview() {
               >
                 {card.value}
               </p>
-              <p className="mt-1 text-[14px] text-[#66707e]">{card.change}</p>
-              <div className="mt-2 h-1.5 w-full rounded-full bg-[#f0f1f4]">
-                <div
-                  className="h-1.5 rounded-full bg-[#ccff1f]"
-                  style={{ width: `${70 - index * 6}%` }}
-                />
+              <p
+                className={`mt-1 text-[12px] sm:text-[14px] font-medium ${
+                  card.changeUp === true
+                    ? "text-[#16a34a]"
+                    : card.changeUp === false
+                      ? "text-[#dc2626]"
+                      : "text-[#66707e]"
+                }`}
+              >
+                {card.change}
+              </p>
+              <div className="mt-2 h-12 w-full min-h-[48px]">
+                {card.chartData.length > 0 ? (
+                  index === 4 && card.chartData2 && card.chartData2.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart
+                        data={card.chartData.map((d, i) => ({
+                          ...d,
+                          takeaway: card.chartData2?.[i]?.value ?? 0,
+                        }))}
+                        margin={{ top: 2, right: 2, left: 2, bottom: 2 }}
+                      >
+                        <defs>
+                          <linearGradient id={`indoorFill-${index}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#22c55e" stopOpacity={0.5} />
+                            <stop offset="100%" stopColor="#22c55e" stopOpacity={0.05} />
+                          </linearGradient>
+                          <linearGradient id={`takeawayFill-${index}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#ef4444" stopOpacity={0.5} />
+                            <stop offset="100%" stopColor="#ef4444" stopOpacity={0.05} />
+                          </linearGradient>
+                        </defs>
+                        <Area
+                          type="monotone"
+                          dataKey="value"
+                          stroke="#22c55e"
+                          strokeWidth={2}
+                          fill={`url(#indoorFill-${index})`}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="takeaway"
+                          stroke="#ef4444"
+                          strokeWidth={2}
+                          fill={`url(#takeawayFill-${index})`}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={card.chartData} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+                        <defs>
+                          <linearGradient id={`cardFill-${index}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#d5ff32" stopOpacity={0.6} />
+                            <stop offset="100%" stopColor="#d5ff32" stopOpacity={0.05} />
+                          </linearGradient>
+                        </defs>
+                        <Area
+                          type="monotone"
+                          dataKey="value"
+                          stroke="#c8fb17"
+                          strokeWidth={2}
+                          fill={`url(#cardFill-${index})`}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  )
+                ) : (
+                  <div className="h-full w-full rounded bg-[#f0f1f4]" />
+                )}
               </div>
             </article>
           ))
@@ -299,10 +535,29 @@ export default function Overview() {
               <p className="py-6 text-center text-[13px] text-[#717c8e]">No top products data available.</p>
             ) : (
               products.map((product, index) => (
-                <div key={`${product.name}-${product.amount}-${index}`}>
+                <div key={`${product.id ?? product.name}-${product.amount}-${index}`}>
                   <div className="flex items-center justify-between text-[14px] sm:text-[17px] gap-2">
-                    <span className="font-semibold text-[#222a35] truncate min-w-0">{product.name}</span>
-                    <span className="font-bold text-[#222a35]">{product.amount}</span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-[#e5e7eb] bg-[#f8f9fb]">
+                        {product.imageUrl ? (
+                          <img
+                            src={
+                              product.imageUrl.startsWith("http")
+                                ? product.imageUrl
+                                : `/api/proxy${product.imageUrl}`
+                            }
+                            alt={product.name}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="h-full w-full flex items-center justify-center text-[14px] font-bold text-[#9ca3af]">
+                            {product.name.charAt(0)}
+                          </div>
+                        )}
+                      </div>
+                      <span className="font-semibold text-[#222a35] truncate">{product.name}</span>
+                    </div>
+                    <span className="font-bold text-[#222a35] shrink-0">{product.amount}</span>
                   </div>
                   <div className="mt-1 h-2 rounded-full bg-[#e8eaef]">
                     <div
@@ -345,7 +600,7 @@ export default function Overview() {
                   </tr>
                 ) : (
                   orders.map((order) => (
-                    <tr key={order.id} className="border-t border-[#eceef2] text-[14px] sm:text-[16px]">
+                    <tr key={order.rowKey} className="border-t border-[#eceef2] text-[14px] sm:text-[16px]">
                       <td className="py-2 font-semibold text-[#242b36]">{order.id}</td>
                       <td className="py-2 text-[#4f5867]">{order.items}</td>
                       <td className="py-2 font-bold text-[#242b36]">{order.total}</td>

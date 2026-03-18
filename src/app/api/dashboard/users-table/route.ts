@@ -3,10 +3,17 @@ import { NextRequest, NextResponse } from "next/server";
 type UserRecord = {
   id?: string;
   name?: string;
+  first_name?: string;
+  last_name?: string;
   email?: string;
+  phone?: string;
   role?: "OWNER" | "ADMIN" | "MANAGER" | "VIEWER";
   is_active?: boolean;
   created_at?: string;
+  location_ids?: string[];
+  location_names?: string[];
+  can_manage_products?: boolean;
+  can_manage_loyalty?: boolean;
 };
 
 function toPositiveInt(value: string | null, fallback: number) {
@@ -47,14 +54,31 @@ export async function GET(request: NextRequest) {
     const role = (sp.get("role") ?? "all").toLowerCase();
     const status = (sp.get("status") ?? "all").toLowerCase();
 
-    const response = await fetchProxyJson<{ users?: UserRecord[] }>(request, "/v1/dashboard/users");
-    let rows = response.users ?? [];
+    const useFilters = search !== "" || role !== "all" || status !== "all";
+    const path = useFilters
+      ? `/v1/dashboard/users?page=1&limit=500`
+      : `/v1/dashboard/users?page=${page}&limit=${limit}`;
+    const response = await fetchProxyJson<{
+      users?: UserRecord[];
+      pagination?: {
+        current_page?: number;
+        total_pages?: number;
+        total_items?: number;
+        items_per_page?: number;
+      };
+    }>(request, path);
+    let rows = (response.users ?? []).map((row) => ({
+      ...row,
+      name: row.name ?? (`${(row.first_name ?? "").trim()} ${(row.last_name ?? "").trim()}`.trim() || "Unnamed user"),
+    }));
 
     if (search) {
       rows = rows.filter((row) => {
-        const name = (row.name ?? "").toLowerCase();
+        const name =
+          (row.name ?? `${row.first_name ?? ""} ${row.last_name ?? ""}`.trim() ?? "").toLowerCase();
         const email = (row.email ?? "").toLowerCase();
-        return name.includes(search) || email.includes(search);
+        const phone = (row.phone ?? "").toLowerCase();
+        return name.includes(search) || email.includes(search) || phone.includes(search);
       });
     }
 
@@ -69,10 +93,16 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const totalItems = rows.length;
-    const totalPages = Math.max(1, Math.ceil(totalItems / limit));
-    const start = (page - 1) * limit;
-    const paged = rows.slice(start, start + limit);
+    const useBackendPagination =
+      search === "" && role === "all" && status === "all" && response.pagination;
+    const totalItems = useBackendPagination
+      ? (response.pagination?.total_items ?? rows.length)
+      : rows.length;
+    const totalPages = useBackendPagination
+      ? Math.max(1, response.pagination?.total_pages ?? 1)
+      : Math.max(1, Math.ceil(totalItems / limit));
+    const start = useBackendPagination ? 0 : (page - 1) * limit;
+    const paged = useBackendPagination ? rows : rows.slice(start, start + limit);
 
     return NextResponse.json({
       users: paged,

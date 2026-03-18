@@ -12,6 +12,14 @@ import { ValidatedInput, ValidatedTextarea } from "@/components/dashboard/ui/Val
 import { validateField } from "@/lib/validation";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
+const EMPTY_VALUE = "—";
+
+function toDisplayValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
+
 type ApiTerminal = {
   id?: string;
   terminal_code?: string;
@@ -91,15 +99,15 @@ const COMMAND_OPTIONS = [
 ];
 
 const mapTerminal = (item: ApiTerminal): TerminalRow => ({
-  id: item.id ?? crypto.randomUUID(),
-  name: item.name ?? "Unnamed terminal",
-  terminalCode: item.terminal_code ?? "N/A",
+  id: toDisplayValue(item.id, "") || crypto.randomUUID(),
+  name: toDisplayValue(item.name, EMPTY_VALUE),
+  terminalCode: toDisplayValue(item.terminal_code, EMPTY_VALUE),
   locationId: item.location_id ?? "",
-  locationName: item.location_name ?? "Unknown location",
+  locationName: toDisplayValue(item.location_name, EMPTY_VALUE),
   mode: item.mode ?? "INDOOR",
   status: item.status ?? "OFFLINE",
   lastSeen: item.last_heartbeat_at ? new Date(item.last_heartbeat_at).toLocaleString() : "Never",
-  appVersion: item.app_version ?? "-",
+  appVersion: toDisplayValue(item.app_version, EMPTY_VALUE),
   isActive: item.is_active ?? true,
 });
 
@@ -185,7 +193,7 @@ export default function TerminalsLocationsPage() {
     try {
       const response = await orderzillaApi.dashboard.locations.list();
       const items = (response?.locations ?? []) as ApiLocation[];
-      setLocations(items.filter((loc) => Boolean(loc.id)).map((loc) => ({ id: loc.id!, name: loc.name ?? "Unnamed" })));
+      setLocations(items.filter((loc) => Boolean(loc.id)).map((loc) => ({ id: loc.id!, name: toDisplayValue(loc.name, EMPTY_VALUE) })));
     } catch {
       setLocations([]);
     }
@@ -514,7 +522,16 @@ export default function TerminalsLocationsPage() {
           />
         </div>
 
-        <div className="mt-4 overflow-hidden rounded-xl border border-[#e5e7eb]">
+        {tableError ? (
+          <div className="mt-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
+            {tableError}{" "}
+            <button type="button" onClick={fetchTerminals} className="font-semibold underline">
+              Retry
+            </button>
+          </div>
+        ) : null}
+
+        <div className="mt-3 overflow-hidden rounded-xl border border-[#e5e7eb]">
           <table className="w-full">
             <thead className="border-b border-[#e5e7eb] bg-[#f7f8fa]">
               <tr className="text-left text-[12px] font-semibold text-[#717c8e]">
@@ -545,7 +562,7 @@ export default function TerminalsLocationsPage() {
               ) : rows.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-3 py-12 text-center text-[13px] text-[#717c8e]">
-                    {tableError || "No terminals found."}
+                    No terminals found.
                   </td>
                 </tr>
               ) : (
@@ -835,11 +852,11 @@ export default function TerminalsLocationsPage() {
             <div className="mt-4 space-y-2 text-[12px]">
               <div className="rounded-lg border border-[#e4e6ea] bg-[#fafbfc] p-3">
                 <p className="text-[#6e7785]">Client ID</p>
-                <p className="mt-1 font-semibold text-[#1a212c] break-all">{createdClientId || "-"}</p>
+                <p className="mt-1 font-semibold text-[#1a212c] break-all">{createdClientId || EMPTY_VALUE}</p>
               </div>
               <div className="rounded-lg border border-[#e4e6ea] bg-[#fafbfc] p-3">
                 <p className="text-[#6e7785]">Client Secret</p>
-                <p className="mt-1 font-semibold text-[#1a212c] break-all">{createdClientSecret || "-"}</p>
+                <p className="mt-1 font-semibold text-[#1a212c] break-all">{createdClientSecret || EMPTY_VALUE}</p>
               </div>
             </div>
             <div className="mt-5 flex items-center justify-end gap-2">

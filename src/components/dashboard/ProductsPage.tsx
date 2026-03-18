@@ -12,8 +12,16 @@ import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api";
 import type { components } from "@/types/orderzilla-openapi";
 
+const EMPTY_VALUE = "—";
+
 type ApiProduct = components["schemas"]["Product"];
 type ApiCategory = components["schemas"]["Category"];
+
+function toDisplayValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
 
 type ProductRow = {
   id: string;
@@ -105,14 +113,16 @@ export default function ProductsPage() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   const mapProduct = (item: ApiProduct): ProductRow => ({
-    id: item.id ?? crypto.randomUUID(),
-    name: item.name ?? "Unnamed product",
-    sku: item.sku ?? "N/A",
+    id: toDisplayValue(item.id, "") || crypto.randomUUID(),
+    name: toDisplayValue(item.name, EMPTY_VALUE),
+    sku: toDisplayValue(item.sku, EMPTY_VALUE),
     categoryId: item.category_id ?? "",
-    category: item.category_name ?? "Uncategorized",
+    category: toDisplayValue(item.category_name, EMPTY_VALUE),
     rawTaxRate: item.tax_rate,
-    basePrice: item.base_price ? `$${item.base_price}` : "$0.00",
-    vat: item.tax_rate ? `${item.tax_rate}%` : "-",
+    basePrice: item.base_price != null && typeof item.base_price === "string"
+      ? `$${item.base_price}`
+      : EMPTY_VALUE,
+    vat: typeof item.tax_rate === "number" ? `${item.tax_rate}%` : EMPTY_VALUE,
     stock: item.is_active ? "In Stock" : "Out of Stock",
     visible: item.is_active ?? true,
     locationOverride: "",
@@ -203,10 +213,10 @@ export default function ProductsPage() {
               body: {
                 name: row.name,
                 category_id: row.categoryId || undefined,
-                sku: row.sku === "N/A" ? undefined : row.sku,
+                sku: row.sku === EMPTY_VALUE ? undefined : row.sku,
                 tax_rate: row.rawTaxRate,
                 is_active: nextVisible,
-              } as never,
+              },
             }),
           ),
       );
@@ -278,10 +288,10 @@ export default function ProductsPage() {
               body: {
                 name: row.name,
                 category_id: assignCategoryId,
-                sku: row.sku === "N/A" ? undefined : row.sku,
+                sku: row.sku === EMPTY_VALUE ? undefined : row.sku,
                 tax_rate: row.rawTaxRate,
                 is_active: row.visible,
-              } as never,
+              },
             }),
           ),
       );
@@ -310,10 +320,15 @@ export default function ProductsPage() {
       }
       const header = parseCsvLine(lines[0]).map((token) => token.toLowerCase());
       const idxName = header.indexOf("name");
+      const idxInternalName = header.indexOf("internal_name");
       const idxSku = header.indexOf("sku");
       const idxCategoryId = header.indexOf("category_id");
       const idxCategoryName = header.indexOf("category_name");
       const idxTaxRate = header.indexOf("tax_rate");
+      const idxVisibleInPos = header.indexOf("visible_in_pos");
+      const idxFeatured = header.indexOf("featured");
+      const idxColorTag = header.indexOf("color_tag");
+      const idxProductType = header.indexOf("product_type");
       if (idxName < 0) {
         toast.error("CSV must include 'name' column.");
         return;
@@ -330,11 +345,20 @@ export default function ProductsPage() {
         const resolvedCategoryId =
           categoryIdRaw || categoryByName.get((categoryNameRaw ?? "").toLowerCase()) || undefined;
         const taxRate = idxTaxRate >= 0 ? Number(cols[idxTaxRate]) : undefined;
+        const visibleInPosRaw = idxVisibleInPos >= 0 ? (cols[idxVisibleInPos] ?? "").toLowerCase() : "";
+        const featuredRaw = idxFeatured >= 0 ? (cols[idxFeatured] ?? "").toLowerCase() : "";
         return {
           name: (cols[idxName] ?? "").trim(),
+          internal_name: idxInternalName >= 0 ? cols[idxInternalName]?.trim() || undefined : undefined,
           sku: idxSku >= 0 ? cols[idxSku] || undefined : undefined,
           category_id: resolvedCategoryId,
           tax_rate: Number.isFinite(taxRate) ? taxRate : undefined,
+          visible_in_pos: visibleInPosRaw === "true" || visibleInPosRaw === "1" ? true : visibleInPosRaw === "false" || visibleInPosRaw === "0" ? false : undefined,
+          featured: featuredRaw === "true" || featuredRaw === "1" ? true : featuredRaw === "false" || featuredRaw === "0" ? false : undefined,
+          color_tag: idxColorTag >= 0 ? cols[idxColorTag]?.trim() || undefined : undefined,
+          product_type: idxProductType >= 0 && ["standard", "variant", "combo"].includes((cols[idxProductType] ?? "").toLowerCase())
+            ? (cols[idxProductType]!.toLowerCase() as "standard" | "variant" | "combo")
+            : undefined,
         };
       });
 
@@ -378,7 +402,7 @@ export default function ProductsPage() {
               options={[
                 { label: "All Locations", value: "all" },
                 ...locations.map((location, index) => ({
-                  label: location.name ?? "Unnamed location",
+                  label: toDisplayValue(location.name, EMPTY_VALUE),
                   value: location.id ?? `missing-location-${index}`,
                 })),
               ]}
@@ -393,7 +417,7 @@ export default function ProductsPage() {
               options={[
                 { label: "All Categories", value: "all" },
                 ...categories.map((cat, index) => ({
-                  label: cat.name ?? "Unnamed",
+                  label: toDisplayValue(cat.name, EMPTY_VALUE),
                   value: cat.id ?? `missing-category-id-${index}`,
                 })),
               ]}
@@ -622,10 +646,10 @@ export default function ProductsPage() {
                                 body: {
                                   name: product.name,
                                   category_id: product.categoryId || undefined,
-                                  sku: product.sku === "N/A" ? undefined : product.sku,
+                                  sku: product.sku === EMPTY_VALUE ? undefined : product.sku,
                                   tax_rate: product.rawTaxRate,
                                   is_active: next,
-                                } as never,
+                                },
                               });
                               setRows((prev) =>
                                 prev.map((row) =>
@@ -658,10 +682,10 @@ export default function ProductsPage() {
                                     body: {
                                       name: product.name,
                                       category_id: product.categoryId || undefined,
-                                      sku: product.sku === "N/A" ? undefined : product.sku,
+                                      sku: product.sku === EMPTY_VALUE ? undefined : product.sku,
                                       tax_rate: product.rawTaxRate,
                                       is_active: next,
-                                    } as never,
+                                    },
                                   });
                                   setRows((prev) =>
                                     prev.map((row) =>
@@ -717,7 +741,7 @@ export default function ProductsPage() {
               options={[
                 { label: "Select category", value: "all" },
                 ...categories.map((cat, index) => ({
-                  label: cat.name ?? "Unnamed",
+                  label: toDisplayValue(cat.name, EMPTY_VALUE),
                   value: cat.id ?? `missing-category-id-${index}`,
                 })),
               ]}

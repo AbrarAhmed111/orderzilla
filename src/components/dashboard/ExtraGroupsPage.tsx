@@ -10,6 +10,14 @@ import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api";
 import type { components } from "@/types/orderzilla-openapi";
 
+const EMPTY_VALUE = "—";
+
+function toDisplayValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
+
 type ApiExtraGroup = components["schemas"]["ExtraGroup"];
 type GroupRow = {
   id: string;
@@ -19,7 +27,7 @@ type GroupRow = {
   minSelections: number;
   maxSelections: number | null;
   sortOrder: number;
-  optionCount: number;
+  optionCount: number | null;
 };
 
 function Toggle({
@@ -58,16 +66,25 @@ export default function ExtraGroupsPage() {
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
-  const mapGroup = (group: ApiExtraGroup): GroupRow => ({
-    id: group.id ?? crypto.randomUUID(),
-    name: group.name ?? "Unnamed group",
-    isRequired: group.is_required ?? false,
-    selectionType: group.selection_type ?? "MULTIPLE",
-    minSelections: group.min_selections ?? 0,
-    maxSelections: group.max_selections ?? null,
-    sortOrder: group.sort_order ?? 0,
-    optionCount: group.option_count ?? 0,
-  });
+  const mapGroup = (group: ApiExtraGroup): GroupRow => {
+    const maxRaw = group.max_selections;
+    const maxSelections =
+      maxRaw == null || maxRaw === -1
+        ? null
+        : typeof maxRaw === "number"
+          ? maxRaw
+          : null;
+    return {
+      id: toDisplayValue(group.id, "") || crypto.randomUUID(),
+      name: toDisplayValue(group.name, EMPTY_VALUE),
+      isRequired: group.is_required ?? false,
+      selectionType: (group.selection_type === "SINGLE" ? "SINGLE" : "MULTIPLE") as "SINGLE" | "MULTIPLE",
+      minSelections: typeof group.min_selections === "number" ? group.min_selections : 0,
+      maxSelections,
+      sortOrder: typeof group.sort_order === "number" ? group.sort_order : 0,
+      optionCount: typeof group.option_count === "number" ? group.option_count : null,
+    };
+  };
 
   const fetchGroups = async () => {
     try {
@@ -95,7 +112,7 @@ export default function ExtraGroupsPage() {
       (row) =>
         row.name.toLowerCase().includes(term) ||
         row.selectionType.toLowerCase().includes(term) ||
-        String(row.optionCount).includes(term),
+        (row.optionCount != null && String(row.optionCount).includes(term)),
     );
   }, [rows, search]);
 
@@ -119,7 +136,7 @@ export default function ExtraGroupsPage() {
           name: row.name,
           selection_type: row.selectionType,
           min_selections: row.minSelections,
-          max_selections: row.maxSelections,
+          max_selections: row.maxSelections ?? -1,
           is_required: nextRequired,
           sort_order: row.sortOrder,
         },
@@ -146,7 +163,7 @@ export default function ExtraGroupsPage() {
               name: row.name,
               selection_type: row.selectionType,
               min_selections: row.minSelections,
-              max_selections: row.maxSelections,
+              max_selections: row.maxSelections ?? -1,
               is_required: nextRequired,
               sort_order: row.sortOrder,
             },
@@ -382,9 +399,9 @@ export default function ExtraGroupsPage() {
                       <td className="px-2 py-3 text-[#3e4653]">
                         {group.selectionType === "SINGLE" ? "Single-select" : "Multi-select"}
                       </td>
-                      <td className="px-2 py-3 text-[#3e4653]">{group.optionCount}</td>
+                      <td className="px-2 py-3 text-[#3e4653]">{group.optionCount ?? EMPTY_VALUE}</td>
                       <td className="px-2 py-3 text-[#3e4653]">
-                        {group.minSelections} / {group.maxSelections ?? "-"}
+                        {group.minSelections} / {group.maxSelections != null ? group.maxSelections : "∞"}
                       </td>
                       <td className="px-3 py-3 text-right">
                         <RowActionMenu

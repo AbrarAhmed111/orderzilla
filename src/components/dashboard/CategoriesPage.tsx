@@ -11,14 +11,72 @@ import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api";
 import type { components } from "@/types/orderzilla-openapi";
 
+const EMPTY_VALUE = "—";
+
 type CategoryRow = {
   id: string;
   name: string;
-  products: number;
+  products: number | null;
   active: boolean;
   color: string;
   imageUrl: string | null;
+  availabilityDisplay: string;
 };
+
+const DAY_ABBREVS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DAY_STR_TO_INDEX: Record<string, number> = {
+  sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6,
+};
+
+function formatTimeHHMMSS(hms: string | null | undefined, defaultVal: string): string {
+  if (!hms || typeof hms !== "string") return defaultVal;
+  const parts = hms.trim().split(":");
+  const h = parseInt(parts[0] ?? "0", 10);
+  const m = parseInt(parts[1] ?? "0", 10);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return defaultVal;
+  const hour12 = h % 12 || 12;
+  const ampm = h < 12 ? "AM" : "PM";
+  return `${hour12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+function formatAvailabilityDays(days: (string | number)[] | null | undefined): string {
+  if (!days || !Array.isArray(days) || days.length === 0) return "";
+  const indices = days
+    .map((d) => {
+      if (typeof d === "number" && d >= 0 && d <= 6) return d;
+      if (typeof d === "string") {
+        const key = d.toLowerCase().slice(0, 3);
+        const idx = DAY_STR_TO_INDEX[key];
+        return idx !== undefined ? idx : -1;
+      }
+      return -1;
+    })
+    .filter((i) => i >= 0);
+  const unique = [...new Set(indices)].sort((a, b) => a - b);
+  if (unique.length === 0) return "";
+  if (unique.length === 7) return "Daily";
+  return unique.map((i) => DAY_ABBREVS[i]).join(", ");
+}
+
+function formatScheduledAvailability(
+  availability: string | null | undefined,
+  days: (string | number)[] | null | undefined,
+  start: string | null | undefined,
+  end: string | null | undefined,
+): string {
+  if (availability !== "scheduled") return availability === "always" ? "Always" : "Always";
+  const daysStr = formatAvailabilityDays(days);
+  const startStr = formatTimeHHMMSS(start, "12:00 AM");
+  const endStr = formatTimeHHMMSS(end, "11:59 PM");
+  if (!daysStr) return `${startStr} – ${endStr}`;
+  return `${daysStr}, ${startStr} – ${endStr}`;
+}
+
+function toDisplayValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
 
 const colorPresets = [
   "from-[#4f3320] to-[#b56c2f]",
@@ -77,14 +135,37 @@ export default function CategoriesPage() {
         orderzillaApi.dashboard.locations.list(),
       ]);
       const categories = (response?.categories ?? []) as components["schemas"]["Category"][];
-      const mapped = categories.map((category, index) => ({
-        id: category.id ?? crypto.randomUUID(),
-        name: category.name ?? "Unnamed category",
-        products: Number(category.product_count ?? 0),
-        active: category.is_active ?? true,
-        color: colorPresets[index % colorPresets.length],
-        imageUrl: category.image_url ?? null,
-      }));
+      const mapped = categories.map((category, index) => {
+        const raw = category.product_count;
+        const productCount =
+          raw == null
+            ? null
+            : (() => {
+                const n = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+                return Number.isFinite(n) ? n : null;
+              })();
+        const ext = category as {
+          availability?: string;
+          availability_days?: (string | number)[];
+          availability_start?: string | null;
+          availability_end?: string | null;
+        };
+        const availabilityDisplay = formatScheduledAvailability(
+          ext.availability,
+          ext.availability_days,
+          ext.availability_start,
+          ext.availability_end,
+        );
+        return {
+          id: toDisplayValue(category.id, "") || crypto.randomUUID(),
+          name: toDisplayValue(category.name, EMPTY_VALUE),
+          products: productCount,
+          active: category.is_active ?? true,
+          color: colorPresets[index % colorPresets.length],
+          imageUrl: category.image_url ?? null,
+          availabilityDisplay,
+        };
+      });
       setAllRows(mapped);
       setRows(mapped);
       const locations = (locationsResponse?.locations ?? []) as components["schemas"]["Location"][];
@@ -99,6 +180,8 @@ export default function CategoriesPage() {
       ]);
     } catch {
       setError("Failed to load categories.");
+      setAllRows([]);
+      setRows([]);
     } finally {
       setIsLoading(false);
     }
@@ -168,7 +251,7 @@ export default function CategoriesPage() {
             body: {
               name: row.name,
               sort_order: index + 1,
-            } as never,
+            },
           }),
         ),
       );
@@ -258,7 +341,11 @@ export default function CategoriesPage() {
             <p className="text-[13px] font-semibold text-right text-[#6f7785]">Actions</p>
           </div>
 
-          {paginatedRows.map((category, index) => (
+          {paginatedRows.length === 0 ? (
+            <div className="px-4 py-10 text-center text-[13px] text-[#717c8e]">
+              No categories found.
+            </div>
+          ) : paginatedRows.map((category, index) => (
             <div
               key={category.id}
               draggable={!isSavingSort}
@@ -301,14 +388,17 @@ export default function CategoriesPage() {
                   <p className="text-[18px] sm:text-[24px] leading-tight font-semibold text-[#1d2430] truncate">
                     {category.name}
                   </p>
-                  <p className="text-[12px] text-[#7a8291]">{category.products} products</p>
+                  <p className="text-[12px] text-[#7a8291]">
+                    {category.products != null ? `${category.products} products` : `${EMPTY_VALUE} products`}
+                  </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-                <Toggle
-                  active={category.active}
-                  onToggle={async (next) => {
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                  <Toggle
+                    active={category.active}
+                    onToggle={async (next) => {
                     const previousRows = rows;
                     const previousAllRows = allRows;
                     setUpdatingId(category.id);
@@ -320,7 +410,7 @@ export default function CategoriesPage() {
                     );
                     try {
                       await orderzillaApi.dashboard.categories.update(category.id, {
-                        body: { name: category.name, is_active: next } as never,
+                        body: { name: category.name, is_active: next },
                       });
                       toast.success(`Category ${next ? "enabled" : "hidden"} successfully.`);
                     } catch {
@@ -344,6 +434,10 @@ export default function CategoriesPage() {
                 {updatingId === category.id ? (
                   <span className="text-[11px] text-[#7a8291]">Saving...</span>
                 ) : null}
+                </div>
+                <p className="text-[11px] text-[#6e7785]">
+                  {category.availabilityDisplay}
+                </p>
               </div>
 
               <div className="text-right">

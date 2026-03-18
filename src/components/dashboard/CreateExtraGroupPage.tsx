@@ -10,6 +10,14 @@ import { orderzillaApi } from "@/lib/api";
 import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
 import { validateField } from "@/lib/validation";
 
+const EMPTY_VALUE = "—";
+
+function toDisplayValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
+
 type OptionRow = {
   localId: string;
   id?: string;
@@ -42,34 +50,40 @@ export default function CreateExtraGroupPage() {
   const [isLoading, setIsLoading] = useState(Boolean(initialId));
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [error, setError] = useState("");
 
   const isEditMode = Boolean(groupId);
 
   const fetchGroup = async (id: string) => {
     try {
       setIsLoading(true);
+      setError("");
       const [group, optionsResp] = await Promise.all([
         orderzillaApi.dashboard.extras.byId(id),
         orderzillaApi.dashboard.extras.options.list(id),
       ]);
-      setName(group?.name ?? "");
+      setName(toDisplayValue(group?.name, ""));
       const trans = group?.translations as Record<string, { description?: string }> | undefined;
       setDescription(trans?.de?.description ?? trans?.en?.description ?? "");
-      setSelectionType(group?.selection_type ?? "MULTIPLE");
+      setSelectionType(group?.selection_type === "SINGLE" ? "SINGLE" : "MULTIPLE");
       setIsRequired(group?.is_required ?? false);
-      setMinSelections(group?.min_selections ?? 0);
-      setMaxSelections(group?.max_selections ?? 0);
-      setSortOrder(group?.sort_order ?? 0);
+      setMinSelections(typeof group?.min_selections === "number" ? group.min_selections : 0);
+      const maxRaw = group?.max_selections;
+      setMaxSelections(
+        maxRaw == null || maxRaw === -1 ? 999 : typeof maxRaw === "number" ? maxRaw : 10,
+      );
+      setSortOrder(typeof group?.sort_order === "number" ? group.sort_order : 0);
       const mappedOptions = (optionsResp?.options ?? []).map((option, index) => ({
         localId: crypto.randomUUID(),
         id: option.id,
-        name: option.name ?? "",
-        priceAdd: option.price_add ?? "0.00",
-        sortOrder: option.sort_order ?? index,
+        name: toDisplayValue(option.name, ""),
+        priceAdd: toDisplayValue(option.price_add, "0.00"),
+        sortOrder: typeof option.sort_order === "number" ? option.sort_order : index,
       }));
       setOptions(mappedOptions.length ? mappedOptions : [makeOptionRow(0)]);
     } catch {
-      toast.error("Failed to load extra group.");
+      setError("Failed to load extra group.");
     } finally {
       setIsLoading(false);
     }
@@ -169,11 +183,12 @@ export default function CreateExtraGroupPage() {
     if (!isFormValid) return;
     try {
       setIsSaving(true);
+      const maxVal = Math.max(0, maxSelections);
       const body = {
         name: name.trim(),
         selection_type: selectionType,
         min_selections: Math.max(0, minSelections),
-        max_selections: Math.max(0, maxSelections),
+        max_selections: maxVal >= 999 ? -1 : maxVal,
         is_required: isRequired,
         sort_order: Math.max(0, sortOrder),
         translations: description.trim()
@@ -204,14 +219,19 @@ export default function CreateExtraGroupPage() {
     }
   };
 
-  const handleDelete = async () => {
+  const handleDeleteClick = () => {
     if (!groupId) {
       resetForm();
       return;
     }
-    if (!window.confirm("Delete this extra group?")) return;
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!groupId) return;
     try {
       setIsDeleting(true);
+      setIsDeleteModalOpen(false);
       await orderzillaApi.dashboard.extras.remove(groupId);
       toast.success("Extra group deleted.");
       router.push("/dashboard/extra-groups");
@@ -231,6 +251,31 @@ export default function CreateExtraGroupPage() {
     return (
       <div className="p-4">
         <TableSkeleton rows={6} columns={4} />
+      </div>
+    );
+  }
+
+  if (error && isEditMode) {
+    return (
+      <div className="p-3 sm:p-4">
+        <section className="rounded-2xl border border-[#e5e7eb] bg-white px-3 sm:px-4 py-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+          <Link
+            href="/dashboard/extra-groups"
+            className="inline-flex items-center gap-1.5 text-[14px] text-[#616a78] hover:text-[#2f3743]"
+          >
+            ← Back to Extra Groups
+          </Link>
+          <div className="mt-4 rounded-lg border border-[#fef3c7] bg-[#fffbeb] px-3 py-2 text-[12px] text-[#92400e]">
+            {error}{" "}
+            <button
+              type="button"
+              onClick={() => initialId && fetchGroup(initialId)}
+              className="font-semibold underline"
+            >
+              Retry
+            </button>
+          </div>
+        </section>
       </div>
     );
   }
@@ -265,7 +310,7 @@ export default function CreateExtraGroupPage() {
             </button>
             <button
               type="button"
-              onClick={handleDelete}
+              onClick={handleDeleteClick}
               disabled={isDeleting}
               className="h-10 rounded-lg border border-[#efc3c3] bg-white px-4 text-[14px] font-semibold text-[#cf4a4a]"
             >
@@ -372,10 +417,13 @@ export default function CreateExtraGroupPage() {
                   <label className="text-[14px] font-semibold text-[#363f4c]">Max selection limit</label>
                   <input
                     type="number"
+                    min={0}
                     className="mt-1 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px] outline-none"
-                    value={maxSelections}
-                    onChange={(e) => setMaxSelections(Number(e.target.value || 0))}
+                    value={maxSelections >= 999 ? 999 : maxSelections}
+                    onChange={(e) => setMaxSelections(Math.max(0, Number(e.target.value || 0)))}
+                    placeholder="999 = unlimited"
                   />
+                  <p className="mt-0.5 text-[12px] text-[#7a8291]">Use 999 for unlimited</p>
                 </div>
                 <div>
                   <label className="text-[14px] font-semibold text-[#363f4c]">Sort order</label>
@@ -472,11 +520,46 @@ export default function CreateExtraGroupPage() {
               )}
             </div>
             <p className="mt-2 text-[14px] text-[#7a8291]">
-              Select {minSelections} to {maxSelections} option(s).
+              Select {minSelections} to {maxSelections >= 999 ? "∞" : maxSelections} option(s).
             </p>
           </article>
         </div>
       </section>
+
+      {isDeleteModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+          onClick={() => !isDeleting && setIsDeleteModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-[400px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-[20px] font-bold text-[#1a212c]">Delete Extra Group</h2>
+            <p className="mt-2 text-[14px] text-[#5f6875]">
+              Are you sure you want to delete &quot;{name || "this extra group"}&quot;? This action cannot be undone.
+            </p>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsDeleteModalOpen(false)}
+                disabled={isDeleting}
+                className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={isDeleting}
+                className="h-10 rounded-lg bg-[#cf4a4a] px-4 text-[14px] font-semibold text-white disabled:opacity-50"
+              >
+                {isDeleting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

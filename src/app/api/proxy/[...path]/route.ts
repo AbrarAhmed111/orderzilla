@@ -75,7 +75,15 @@ async function handleProxy(request: NextRequest, context: ProxyContext) {
     responseHeaders.delete("transfer-encoding");
     responseHeaders.delete("connection");
 
-    return new NextResponse(upstreamResponse.data, {
+    // Decode ArrayBuffer to string for JSON/text so the response body is visible in the Network tab
+    const contentType = responseHeaders.get("content-type") ?? "";
+    const isJson = contentType.includes("application/json") || contentType.includes("application/problem+json");
+    const responseBody: ArrayBuffer | string =
+      isJson && upstreamResponse.data && upstreamResponse.data.byteLength > 0
+        ? new TextDecoder().decode(upstreamResponse.data)
+        : upstreamResponse.data;
+
+    return new NextResponse(responseBody, {
       status: upstreamResponse.status,
       statusText: upstreamResponse.statusText,
       headers: responseHeaders,
