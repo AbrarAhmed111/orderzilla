@@ -9,6 +9,7 @@ import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api/orderzilla-api";
 import type { DashboardSettings } from "@/lib/api/orderzilla-api";
 import type { components } from "@/types/orderzilla-openapi";
+import { proxiedImageSrc } from "@/lib/media-url";
 
 const EMPTY_VALUE = "—";
 
@@ -148,6 +149,58 @@ const DEFAULT_SYSTEM = {
   enableDebugLogs: false,
 };
 
+type SettingsRecord = DashboardSettings & Record<string, unknown>;
+
+function normalizeDecimalFormat(raw: unknown): "comma" | "dot" | undefined {
+  const u = String(raw ?? "").toLowerCase();
+  if (u === "comma" || u === ",") return "comma";
+  if (u === "dot" || u === "period" || u === ".") return "dot";
+  return undefined;
+}
+
+/** Read GET /settings with canonical keys and a few backend aliases. */
+function readExtendedSettings(settings: SettingsRecord) {
+  const s = settings;
+  return {
+    rounding:
+      (s.price_rounding_step as string | undefined) ??
+      (s.rounding_rule as string | undefined) ??
+      (s.rounding_step as string | undefined),
+    decimalFormat:
+      normalizeDecimalFormat(s.decimal_separator) ??
+      normalizeDecimalFormat(s.decimal_format),
+    printReceipt: s.print_receipt_automatically ?? (s.auto_print_receipt as boolean | undefined),
+    emailReceipt: s.email_receipt_enabled ?? (s.email_receipt as boolean | undefined),
+    kitchenPrinter:
+      (s.kitchen_printer_terminal_id as string | undefined) ??
+      (s.kitchen_printer_id as string | undefined) ??
+      (s.default_kitchen_printer_id as string | undefined),
+    idleTimeout: s.idle_screen_timeout_seconds ?? (s.idle_timeout_seconds as number | undefined),
+    autoRefreshMenu: s.auto_refresh_menu_enabled ?? (s.auto_refresh_menu as boolean | undefined),
+    maintenanceMode: s.maintenance_mode ?? (s.global_maintenance_mode as boolean | undefined),
+    terminalAutoClose:
+      s.terminal_auto_close_seconds ?? (s.terminal_auto_close_after_payment_seconds as number | undefined),
+    orderTimeout: s.order_timeout_seconds ?? (s.order_timeout_duration_seconds as number | undefined),
+    allowPriceOverride: s.allow_price_override ?? (s.terminal_price_override_enabled as boolean | undefined),
+    enableDebugLogs: s.enable_debug_logs ?? (s.debug_logging_enabled as boolean | undefined),
+  };
+}
+
+function formatReceiptMoney(amount: number, currency: string, decimalFormat: string): string {
+  const n = Math.round(amount * 100) / 100;
+  let s = n.toFixed(2);
+  if (decimalFormat === "comma") s = s.replace(".", ",");
+  return `${s} ${currency}`;
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 export default function GlobalSettingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -184,6 +237,7 @@ export default function GlobalSettingsPage() {
 
       const settings = settingsRes as DashboardSettings | null;
       if (settings) {
+        const ext = readExtendedSettings(settings as SettingsRecord);
         setCompany((prev) => ({
           ...prev,
           name: toDisplayValue(settings.company_name, ""),
@@ -200,6 +254,8 @@ export default function GlobalSettingsPage() {
           defaultVat: settings.default_vat_rate != null ? String(settings.default_vat_rate) : prev.defaultVat,
           currency: settings.currency ?? prev.currency,
           pricesIncludeVat: settings.prices_include_vat ?? prev.pricesIncludeVat,
+          rounding: ext.rounding ?? prev.rounding,
+          decimalFormat: ext.decimalFormat ?? prev.decimalFormat,
         }));
         const pm = settings.default_payment_method?.toUpperCase();
         const validMethod = ["CARD", "CASH", "MOBILE_PAY", "GIFT_CARD"].includes(pm ?? "")
@@ -212,10 +268,35 @@ export default function GlobalSettingsPage() {
           enableMobilePay: settings.enable_mobile_pay ?? prev.enableMobilePay,
           enableGiftCards: settings.enable_gift_cards ?? prev.enableGiftCards,
           defaultMethod: validMethod,
+          terminalAutoClose:
+            ext.terminalAutoClose != null && Number.isFinite(Number(ext.terminalAutoClose))
+              ? Math.max(0, Math.min(60, Math.floor(Number(ext.terminalAutoClose))))
+              : prev.terminalAutoClose,
+        }));
+        setReceipt((prev) => ({
+          ...prev,
+          printAutomatically: ext.printReceipt ?? prev.printAutomatically,
+          emailReceipt: ext.emailReceipt ?? prev.emailReceipt,
+          kitchenPrinter: ext.kitchenPrinter ?? prev.kitchenPrinter,
+          idleScreenTimeout:
+            ext.idleTimeout != null && Number.isFinite(Number(ext.idleTimeout))
+              ? Math.max(10, Math.min(300, Math.floor(Number(ext.idleTimeout))))
+              : prev.idleScreenTimeout,
+          autoRefreshMenu: ext.autoRefreshMenu ?? prev.autoRefreshMenu,
+          maintenanceMode: ext.maintenanceMode ?? prev.maintenanceMode,
+        }));
+        setOperational((prev) => ({
+          ...prev,
+          orderTimeout:
+            ext.orderTimeout != null && Number.isFinite(Number(ext.orderTimeout))
+              ? Math.max(30, Math.min(600, Math.floor(Number(ext.orderTimeout))))
+              : prev.orderTimeout,
         }));
         setSystem((prev) => ({
           ...prev,
           enableLoyalty: settings.enable_loyalty_program ?? prev.enableLoyalty,
+          allowPriceOverride: ext.allowPriceOverride ?? prev.allowPriceOverride,
+          enableDebugLogs: ext.enableDebugLogs ?? prev.enableDebugLogs,
         }));
       } else {
         const firstLoc = nextLocations.find((l) => l.id);
@@ -255,6 +336,13 @@ export default function GlobalSettingsPage() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      const logoPayload =
+        company.logoUrl == null
+          ? { logo_url: null as string | null }
+          : company.logoUrl.startsWith("blob:")
+            ? {}
+            : { logo_url: company.logoUrl };
+
       await orderzillaApi.dashboard.settings.update({
         company_name: company.name,
         primary_brand_color: company.primaryColor,
@@ -268,17 +356,36 @@ export default function GlobalSettingsPage() {
         default_vat_rate: Number(tax.defaultVat) || 8.1,
         currency: tax.currency,
         prices_include_vat: tax.pricesIncludeVat,
+        price_rounding_step: tax.rounding,
+        decimal_separator: tax.decimalFormat,
+        print_receipt_automatically: receipt.printAutomatically,
+        email_receipt_enabled: receipt.emailReceipt,
+        kitchen_printer_terminal_id: receipt.kitchenPrinter,
+        idle_screen_timeout_seconds: receipt.idleScreenTimeout,
+        auto_refresh_menu_enabled: receipt.autoRefreshMenu,
+        maintenance_mode: receipt.maintenanceMode,
         enable_cash: payment.enableCash,
         enable_card: payment.enableCard,
         enable_mobile_pay: payment.enableMobilePay,
         enable_gift_cards: payment.enableGiftCards,
         default_payment_method: payment.defaultMethod,
+        terminal_auto_close_seconds: payment.terminalAutoClose,
+        order_timeout_seconds: operational.orderTimeout,
         enable_loyalty_program: system.enableLoyalty,
+        allow_price_override: system.allowPriceOverride,
+        enable_debug_logs: system.enableDebugLogs,
+        ...logoPayload,
       });
       toast.success("Settings saved.");
       await fetchData();
     } catch (err) {
-      toast.error("Failed to save settings.");
+      const msg =
+        err && typeof err === "object" && "response" in err
+          ? String(
+              (err as { response?: { data?: { message?: string } } }).response?.data?.message ?? "",
+            ).trim()
+          : "";
+      toast.error(msg || "Failed to save settings.");
     } finally {
       setIsSaving(false);
     }
@@ -352,7 +459,14 @@ export default function GlobalSettingsPage() {
         toast.success("Logo preview updated.");
       }
     } catch {
-      toast.success("Logo preview updated.");
+      URL.revokeObjectURL(objectUrl);
+      toast.error("Logo upload failed.");
+      try {
+        const s = await orderzillaApi.dashboard.settings.get();
+        setCompany((p) => ({ ...p, logoUrl: s?.logo_url ?? null }));
+      } catch {
+        setCompany((p) => ({ ...p, logoUrl: null }));
+      }
     } finally {
       setIsUploadingLogo(false);
     }
@@ -383,10 +497,86 @@ export default function GlobalSettingsPage() {
       .filter((t): t is ApiTerminal & { id: string } => Boolean(t.id))
       .map((t, i) => ({
         value: t.id,
-        label: toDisplayValue(t.name, `Kitchen Printer #${i + 1}`),
+        label: toDisplayValue(t.name, `Terminal / printer #${i + 1}`),
       }));
     return fromTerminals.length ? fromTerminals : KITCHEN_PRINTER_OPTIONS;
   }, [terminals]);
+
+  useEffect(() => {
+    if (!kitchenPrinterOptions.length) return;
+    const ok = kitchenPrinterOptions.some((o) => o.value === receipt.kitchenPrinter);
+    if (!ok) {
+      setReceipt((p) => ({ ...p, kitchenPrinter: kitchenPrinterOptions[0]!.value }));
+    }
+  }, [kitchenPrinterOptions, receipt.kitchenPrinter]);
+
+  const handlePrintTestReceipt = useCallback(() => {
+    const name = company.name.trim() || "Your company";
+    const addr = [company.street, [company.zip, company.city].filter(Boolean).join(" "), company.country]
+      .filter((x) => x?.trim())
+      .join(" · ");
+    const step = Number(tax.rounding) || 0.05;
+    const line1 = 12.5;
+    const line2 = 6.0;
+    const sub = line1 + line2;
+    const total = Math.round(sub / step) * step;
+    const vatNote = tax.pricesIncludeVat
+      ? `Prices include VAT (${tax.defaultVat}%).`
+      : `VAT ${tax.defaultVat}% shown where applicable.`;
+    const kitchenLabel =
+      kitchenPrinterOptions.find((o) => o.value === receipt.kitchenPrinter)?.label ?? receipt.kitchenPrinter;
+    const flags = [
+      receipt.printAutomatically ? "Auto-print: on" : "Auto-print: off",
+      receipt.emailReceipt ? "Email receipt: on" : "Email receipt: off",
+    ].join(" · ");
+
+    const bodyInner = `
+      <div style="text-align:center;border-bottom:1px dashed #ccc;padding-bottom:8px;margin-bottom:8px">
+        <div style="font-weight:700;font-size:14px">${escapeHtml(name)}</div>
+        ${addr ? `<div style="font-size:11px;color:#555;margin-top:4px">${escapeHtml(addr)}</div>` : ""}
+      </div>
+      <div style="font-size:11px;margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between"><span>Americano</span><span>${formatReceiptMoney(line1, tax.currency, tax.decimalFormat)}</span></div>
+        <div style="display:flex;justify-content:space-between"><span>Croissant</span><span>${formatReceiptMoney(line2, tax.currency, tax.decimalFormat)}</span></div>
+        <div style="border-top:1px solid #eee;margin-top:6px;padding-top:6px;display:flex;justify-content:space-between;font-weight:700">
+          <span>Total</span><span>${formatReceiptMoney(total, tax.currency, tax.decimalFormat)}</span>
+        </div>
+      </div>
+      <div style="font-size:10px;color:#666;margin-bottom:8px">${escapeHtml(vatNote)} Rounding: ${escapeHtml(tax.rounding)}.</div>
+      ${company.receiptFooter.trim() ? `<div style="font-size:10px;text-align:center;border-top:1px dashed #ccc;padding-top:8px;white-space:pre-wrap">${escapeHtml(company.receiptFooter.trim())}</div>` : ""}
+      <div style="font-size:9px;color:#999;margin-top:10px;text-align:center">${escapeHtml(flags)}</div>
+      <div style="font-size:9px;color:#999;text-align:center">Kitchen route: ${escapeHtml(kitchenLabel)}</div>
+    `;
+
+    const w = window.open("", "_blank");
+    if (!w) {
+      toast.error("Allow pop-ups to print the test receipt.");
+      return;
+    }
+    const accent = /^#[0-9A-Fa-f]{6}$/.test(company.primaryColor) ? company.primaryColor : "#D0FE1D";
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Test receipt</title>
+      <style>
+        body { font-family: ui-sans-serif, system-ui, sans-serif; padding: 16px; max-width: 320px; margin: 0 auto; color: #111; }
+        @media print { body { padding: 8px; } }
+      </style></head><body style="border-top:4px solid ${accent}">${bodyInner}</body></html>`);
+    w.document.close();
+    w.focus();
+    w.print();
+    w.close();
+    toast.success("Print dialog opened.");
+  }, [company, tax, receipt, kitchenPrinterOptions]);
+
+  const receiptPreviewSample = useMemo(() => {
+    const step = Number(tax.rounding) || 0.05;
+    const line1 = 12.5;
+    const line2 = 6.0;
+    const sub = line1 + line2;
+    const total = Math.round(sub / step) * step;
+    return { line1, line2, total };
+  }, [tax.rounding]);
+
+  const previewAccent =
+    /^#[0-9A-Fa-f]{6}$/.test(company.primaryColor) ? company.primaryColor : "#D0FE1D";
 
   if (isLoading) {
     return (
@@ -449,7 +639,8 @@ export default function GlobalSettingsPage() {
           </div>
         </div>
 
-        <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {/* xl (1280px)+: 3 columns — avoids ~320px middle column at 1024–1279 where Receipt preview overlapped controls */}
+        <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-3">
           {/* Left: Company & Branding */}
           <div className="space-y-4">
             <Card title="Company & Branding">
@@ -468,7 +659,11 @@ export default function GlobalSettingsPage() {
                 <div className="flex items-center gap-3">
                   <div className="h-16 w-16 rounded-full bg-[#fef08a] flex items-center justify-center overflow-hidden shrink-0">
                     {company.logoUrl ? (
-                      <img src={company.logoUrl} alt="Logo" className="h-full w-full object-cover" />
+                      <img
+                        src={proxiedImageSrc(company.logoUrl) ?? company.logoUrl}
+                        alt="Logo"
+                        className="h-full w-full object-cover"
+                      />
                     ) : (
                       <span className="text-[10px] font-bold text-[#854d0e] text-center px-1">
                         ORDERZILLA
@@ -611,28 +806,35 @@ export default function GlobalSettingsPage() {
             </Card>
 
             <Card title="Receipt & Printing">
-              <div className="flex items-start gap-4">
-                <div className="flex-1 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[13px] font-medium text-[#2f3743]">
+              {/* Full-width page (below xl): side-by-side from md. Three-col grid (xl–2xl): stack so column isn’t crushed. 2xl+: side-by-side again. */}
+              <div className="flex flex-col gap-4 md:flex-row md:items-start md:gap-6 xl:flex-col xl:gap-4 2xl:flex-row 2xl:items-start 2xl:gap-6">
+                <div className="min-w-0 w-full flex-1 space-y-3 md:min-h-0">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                    <span className="text-[13px] font-medium text-[#2f3743] sm:min-w-0 sm:flex-1">
                       Print receipt automatically
                     </span>
-                    <Toggle
-                      on={receipt.printAutomatically}
-                      onToggle={(next) =>
-                        setReceipt((p) => ({ ...p, printAutomatically: next }))
-                      }
-                    />
+                    <div className="shrink-0 self-start sm:self-center">
+                      <Toggle
+                        on={receipt.printAutomatically}
+                        onToggle={(next) =>
+                          setReceipt((p) => ({ ...p, printAutomatically: next }))
+                        }
+                      />
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[13px] font-medium text-[#2f3743]">Email receipt</span>
-                    <Toggle
-                      on={receipt.emailReceipt}
-                      onToggle={(next) => setReceipt((p) => ({ ...p, emailReceipt: next }))}
-                    />
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                    <span className="text-[13px] font-medium text-[#2f3743] sm:min-w-0 sm:flex-1">
+                      Email receipt
+                    </span>
+                    <div className="shrink-0 self-start sm:self-center">
+                      <Toggle
+                        on={receipt.emailReceipt}
+                        onToggle={(next) => setReceipt((p) => ({ ...p, emailReceipt: next }))}
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <Label>Kitchen printer routing</Label>
+                  <div className="w-full">
+                    <Label>Kitchen / terminal routing</Label>
                     <SelectMenu
                       value={
                         kitchenPrinterOptions.some((o) => o.value === receipt.kitchenPrinter)
@@ -642,11 +844,75 @@ export default function GlobalSettingsPage() {
                       onChange={(v) => setReceipt((p) => ({ ...p, kitchenPrinter: v }))}
                       options={kitchenPrinterOptions}
                     />
+                    <p className="mt-1 text-[11px] text-[#6e7785] leading-snug">
+                      When your terminals are connected, pick where kitchen orders are sent. Otherwise you’ll see
+                      default options until devices are available.
+                    </p>
                   </div>
                 </div>
-                <div className="hidden sm:block w-24 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] p-2 text-[10px] text-center text-[#6b7280]">
-                  ORDERZILLA RECEIPT
+                <div
+                  className="w-full max-w-[min(100%,280px)] mx-auto shrink-0 rounded-lg border border-[#e5e7eb] bg-white p-3 text-[10px] text-[#374151] shadow-sm md:mx-0 md:max-w-[240px] xl:max-w-[min(100%,320px)] 2xl:mx-0 2xl:w-[220px] 2xl:max-w-[220px]"
+                  style={{ borderTopWidth: 4, borderTopColor: previewAccent }}
+                >
+                  <p className="font-bold text-[11px] text-center text-[#111] leading-tight">
+                    {company.name.trim() || "Your company"}
+                  </p>
+                  {[company.street, [company.zip, company.city].filter(Boolean).join(" "), company.country]
+                    .filter((x) => x?.trim())
+                    .map((line, idx) => (
+                      <p key={`addr-${idx}`} className="text-center text-[9px] text-[#6b7280] mt-0.5">
+                        {line}
+                      </p>
+                    ))}
+                  <div className="mt-2 pt-2 border-t border-dashed border-[#e5e7eb] space-y-1">
+                    <div className="flex justify-between gap-2">
+                      <span>Americano</span>
+                      <span className="font-medium tabular-nums">
+                        {formatReceiptMoney(receiptPreviewSample.line1, tax.currency, tax.decimalFormat)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span>Croissant</span>
+                      <span className="font-medium tabular-nums">
+                        {formatReceiptMoney(receiptPreviewSample.line2, tax.currency, tax.decimalFormat)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2 pt-1 border-t border-[#eee] font-bold">
+                      <span>Total</span>
+                      <span className="tabular-nums">
+                        {formatReceiptMoney(receiptPreviewSample.total, tax.currency, tax.decimalFormat)}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-[9px] text-[#6b7280] mt-2 leading-snug">
+                    {tax.pricesIncludeVat
+                      ? `Prices incl. VAT (${tax.defaultVat}%).`
+                      : `VAT ${tax.defaultVat}% where applicable.`}{" "}
+                    Round {tax.rounding}.
+                  </p>
+                  {company.receiptFooter.trim() ? (
+                    <p className="text-[9px] text-center text-[#374151] mt-2 pt-2 border-t border-dashed border-[#e5e7eb] whitespace-pre-wrap">
+                      {company.receiptFooter.trim()}
+                    </p>
+                  ) : null}
+                  <p className="text-[8px] text-[#9ca3af] text-center mt-2">
+                    {receipt.printAutomatically ? "Auto-print on" : "Auto-print off"} ·{" "}
+                    {receipt.emailReceipt ? "Email on" : "Email off"}
+                  </p>
                 </div>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                <button
+                  type="button"
+                  onClick={handlePrintTestReceipt}
+                  className="h-10 sm:h-9 w-full sm:w-auto shrink-0 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[13px] sm:text-[12px] font-semibold text-[#414855] hover:bg-[#f9fafb]"
+                >
+                  Print test receipt
+                </button>
+                <p className="text-[11px] sm:text-[10px] text-[#6e7785] leading-relaxed sm:min-w-0 sm:flex-1">
+                  Opens your browser’s print window so you can check the layout. Use your computer or POS printer
+                  settings to print on paper.
+                </p>
               </div>
               <div>
                 <Label>Idle screen timeout (seconds)</Label>
@@ -664,21 +930,27 @@ export default function GlobalSettingsPage() {
                   className="h-9 w-full rounded-lg border border-[#dfe3e8] px-3 text-[12px] outline-none focus:border-[#c0eb1a]"
                 />
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[13px] font-medium text-[#2f3743]">Auto-refresh menu</span>
-                <Toggle
-                  on={receipt.autoRefreshMenu}
-                  onToggle={(next) => setReceipt((p) => ({ ...p, autoRefreshMenu: next }))}
-                />
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                <span className="text-[13px] font-medium text-[#2f3743] sm:min-w-0 sm:flex-1">
+                  Auto-refresh menu
+                </span>
+                <div className="shrink-0 self-start sm:self-center">
+                  <Toggle
+                    on={receipt.autoRefreshMenu}
+                    onToggle={(next) => setReceipt((p) => ({ ...p, autoRefreshMenu: next }))}
+                  />
+                </div>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[13px] font-medium text-[#2f3743]">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                <span className="text-[13px] font-medium text-[#2f3743] sm:min-w-0 sm:flex-1">
                   Maintenance mode (global)
                 </span>
-                <Toggle
-                  on={receipt.maintenanceMode}
-                  onToggle={(next) => setReceipt((p) => ({ ...p, maintenanceMode: next }))}
-                />
+                <div className="shrink-0 self-start sm:self-center">
+                  <Toggle
+                    on={receipt.maintenanceMode}
+                    onToggle={(next) => setReceipt((p) => ({ ...p, maintenanceMode: next }))}
+                  />
+                </div>
               </div>
             </Card>
           </div>

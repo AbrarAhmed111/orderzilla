@@ -9,8 +9,10 @@ import SelectMenu from "@/components/dashboard/ui/SelectMenu";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api";
 import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
+import { dedupePriceRulesForSave, normalizePriceMode } from "@/lib/product-pricing";
 import { validateField } from "@/lib/validation";
 import type { components } from "@/types/orderzilla-openapi";
+import { displayImageSrc } from "@/lib/media-url";
 
 const EMPTY_VALUE = "—";
 
@@ -80,10 +82,7 @@ const createPriceDraft = (overrides?: Partial<PriceDraft>): PriceDraft => ({
 const mapApiPrice = (price: ApiPrice): PriceDraft => ({
   localId: crypto.randomUUID(),
   priceId: String(price.id ?? ""),
-  mode:
-    price.mode === "INDOOR" || price.mode === "TAKEAWAY" || price.mode === "BOTH"
-      ? price.mode
-      : "BOTH",
+  mode: normalizePriceMode(price.mode),
   price: String(price.price ?? ""),
   currency: String(price.currency ?? "CHF"),
   location_id: price.location_id != null ? String(price.location_id) : "",
@@ -131,6 +130,7 @@ export default function EditProductPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const savePricesLockRef = useRef(false);
   const productId = searchParams.get("id") ?? "";
   const tabParam = searchParams.get("tab");
 
@@ -160,6 +160,8 @@ export default function EditProductPage() {
   const [extraGroups, setExtraGroups] = useState<ApiExtraGroup[]>([]);
   const [selectedExtraGroupIds, setSelectedExtraGroupIds] = useState<string[]>([]);
   const [initialExtraGroupIds, setInitialExtraGroupIds] = useState<string[]>([]);
+  /** Price UUIDs returned by GET prices on load — used on Save to DELETE any rows removed from the form (fixes orphan rows + failed per-row deletes). */
+  const serverPriceIdsAtLoadRef = useRef<string[]>([]);
   const [availability, setAvailability] = useState<"always" | "scheduled">("always");
   const [availabilityDays, setAvailabilityDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
   const [availabilityStart, setAvailabilityStart] = useState("");
@@ -248,6 +250,9 @@ export default function EditProductPage() {
       );
 
       const priceRows = (pricesRes?.prices ?? []) as ApiPrice[];
+      serverPriceIdsAtLoadRef.current = priceRows
+        .map((p) => String(p.id ?? "").trim())
+        .filter((pid) => pid.length > 0);
       const basePrice = (product as { base_price?: string | number })?.base_price;
       setPrices(
         priceRows.length
@@ -260,12 +265,16 @@ export default function EditProductPage() {
       setTerminals((terminalsRes?.terminals ?? []) as ApiTerminal[]);
       setExtraGroups((extrasRes?.extra_groups ?? []) as ApiExtraGroup[]);
 
-      const linked = ((linkedExtrasRes?.extra_groups ?? []) as ApiExtraGroup[])
-        .map((group) => group.id)
-        .filter((id): id is string => id != null && id !== "")
-        .map((id) => String(id));
+      const linked = [
+        ...new Set(
+          ((linkedExtrasRes?.extra_groups ?? []) as ApiExtraGroup[])
+            .map((group) => group.id)
+            .filter((id): id is string => id != null && id !== "")
+            .map((id) => String(id)),
+        ),
+      ];
       setSelectedExtraGroupIds(linked);
-      setInitialExtraGroupIds(linked);
+      setInitialExtraGroupIds([...linked]);
 
       if (availabilityRes) {
         setAvailability(availabilityRes.availability === "scheduled" ? "scheduled" : "always");
@@ -345,14 +354,16 @@ export default function EditProductPage() {
   };
 
   const removePrice = async (row: PriceDraft) => {
-    if (prices.length <= 1) return;
-    setPrices((prev) => prev.filter((item) => item.localId !== row.localId));
-    if (row.priceId && productId) {
+    const serverId = row.priceId?.trim() || null;
+    setPrices((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((item) => item.localId !== row.localId);
+    });
+    if (serverId && productId) {
       try {
-        await orderzillaApi.dashboard.products.prices.remove(productId, row.priceId);
-        toast.success("Price removed.");
+        await orderzillaApi.dashboard.products.prices.remove(productId, serverId);
       } catch {
-        toast.error("Price removed from form. Save may be needed to sync with server.");
+        toast.error("Could not delete this price on the server. Click Save to retry sync.");
       }
     }
   };
@@ -421,8 +432,10 @@ export default function EditProductPage() {
   const saveProduct = async () => {
     const effectiveName = (name || displayName).trim();
     if (!productId || !effectiveName) return;
+    if (savePricesLockRef.current) return;
+    savePricesLockRef.current = true;
 
-    const validPrices = prices.filter((p) => p.price.trim().length > 0);
+    let validPrices = prices.filter((p) => p.price.trim().length > 0);
     if (validPrices.length === 0 && displayPrice) {
       validPrices.push({
         ...createPriceDraft(),
@@ -430,6 +443,9 @@ export default function EditProductPage() {
         currency: "CHF",
       });
     }
+    validPrices = dedupePriceRulesForSave(
+      validPrices.map((p) => ({ ...p, mode: normalizePriceMode(p.mode) })),
+    );
 
     try {
       setIsSaving(true);
@@ -457,40 +473,51 @@ export default function EditProductPage() {
       });
 
       if (validPrices.length > 0) {
+        const currentPriceIds = new Set(
+          validPrices.map((p) => p.priceId?.trim()).filter((pid): pid is string => Boolean(pid)),
+        );
+        const orphanPriceIds = serverPriceIdsAtLoadRef.current.filter((pid) => !currentPriceIds.has(pid));
+        for (const pid of orphanPriceIds) {
+          try {
+            await orderzillaApi.dashboard.products.prices.remove(productId, pid);
+          } catch {
+            /* already removed or 404 */
+          }
+        }
+
         await orderzillaApi.dashboard.products.prices.upsert(productId, {
           body: {
+            /* Omit client id: some APIs duplicate rows when id is sent with bulk PUT; orphans already removed above. */
             prices: validPrices.map((price) => ({
               mode: price.mode,
               price: price.price.trim(),
               currency: price.currency.trim() || "CHF",
-              location_id: price.location_id || null,
-              terminal_id: price.terminal_id || null,
-              valid_from: price.valid_from || null,
-              valid_until: price.valid_until || null,
+              location_id: price.location_id?.trim() ? price.location_id.trim() : null,
+              terminal_id: price.terminal_id?.trim() ? price.terminal_id.trim() : null,
+              valid_from: price.valid_from?.trim() ? price.valid_from.trim() : null,
+              valid_until: price.valid_until?.trim() ? price.valid_until.trim() : null,
             })),
           },
         });
       }
 
-      const toAttach = selectedExtraGroupIds.filter((id) => !initialExtraGroupIds.includes(id));
-      const toDetach = initialExtraGroupIds.filter((id) => !selectedExtraGroupIds.includes(id));
+      const uniqueSelected = [...new Set(selectedExtraGroupIds)];
+      const toAttach = uniqueSelected.filter((id) => !initialExtraGroupIds.includes(id));
+      const toDetach = initialExtraGroupIds.filter((id) => !uniqueSelected.includes(id));
 
-      if (toAttach.length > 0) {
-        await Promise.all(
-          toAttach.map((groupId, index) =>
-            orderzillaApi.dashboard.products.extras.attach(productId, {
-              body: { extra_group_id: groupId, sort_order: index },
-            }),
-          ),
-        );
+      for (const groupId of toDetach) {
+        try {
+          await orderzillaApi.dashboard.products.extras.detach(productId, groupId);
+        } catch {
+          /* continue — Save may still succeed for other groups */
+        }
       }
 
-      if (toDetach.length > 0) {
-        await Promise.all(
-          toDetach.map((groupId) =>
-            orderzillaApi.dashboard.products.extras.detach(productId, groupId),
-          ),
-        );
+      for (const groupId of toAttach) {
+        const sortOrder = Math.max(0, uniqueSelected.indexOf(groupId));
+        await orderzillaApi.dashboard.products.extras.attach(productId, {
+          body: { extra_group_id: groupId, sort_order: sortOrder },
+        });
       }
 
       if (imageFile) {
@@ -532,6 +559,7 @@ export default function EditProductPage() {
     } catch {
       toast.error("Failed to update product.");
     } finally {
+      savePricesLockRef.current = false;
       setIsSaving(false);
     }
   };
@@ -682,10 +710,7 @@ export default function EditProductPage() {
                       <div className="h-20 w-20 overflow-hidden rounded-lg border border-[#e4e6ea] bg-[#f6f8fa]">
                         {(imagePreviewUrl || imageUrl) ? (
                           <img
-                            src={
-                              imagePreviewUrl ||
-                              (imageUrl?.startsWith("http") ? imageUrl : `/api/proxy${imageUrl}`)
-                            }
+                            src={displayImageSrc(imagePreviewUrl, imageUrl) ?? ""}
                             alt="Product"
                             className="h-full w-full object-cover"
                           />
@@ -1009,13 +1034,9 @@ export default function EditProductPage() {
                     <div key={price.localId} className="rounded-lg border border-[#e5e7eb] p-3">
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                         <SelectMenu
-                          value={price.mode}
+                          value={normalizePriceMode(price.mode)}
                           onChange={(value) =>
-                            updatePrice(
-                              price.localId,
-                              "mode",
-                              value === "INDOOR" || value === "TAKEAWAY" ? value : "BOTH",
-                            )
+                            updatePrice(price.localId, "mode", normalizePriceMode(value))
                           }
                           options={[
                             { label: "Both", value: "BOTH" },
@@ -1209,7 +1230,11 @@ export default function EditProductPage() {
                             checked={checked}
                             onChange={(e) =>
                               setSelectedExtraGroupIds((prev) =>
-                                e.target.checked ? [...prev, id] : prev.filter((x) => x !== id),
+                                e.target.checked
+                                  ? prev.includes(id)
+                                    ? prev
+                                    : [...prev, id]
+                                  : prev.filter((x) => x !== id),
                               )
                             }
                           />
@@ -1346,10 +1371,7 @@ export default function EditProductPage() {
                 <div className="aspect-square bg-[#f6f8fa]">
                   {(imagePreviewUrl || imageUrl) ? (
                     <img
-                      src={
-                        imagePreviewUrl ||
-                        (imageUrl?.startsWith("http") ? imageUrl : `/api/proxy${imageUrl}`)
-                      }
+                      src={displayImageSrc(imagePreviewUrl, imageUrl) ?? ""}
                       alt={displayName}
                       className="h-full w-full object-cover"
                     />

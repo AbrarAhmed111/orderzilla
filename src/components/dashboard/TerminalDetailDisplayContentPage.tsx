@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Cloud, GripVertical, X, ChevronDown } from "lucide-react";
 import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
 import { orderzillaApi } from "@/lib/api";
+import { proxiedImageSrc } from "@/lib/media-url";
 import type { TerminalDisplayContent } from "@/lib/api/orderzilla-api";
 
 type TerminalDetailDisplayContentPageProps = {
@@ -20,6 +21,15 @@ type FeaturedItem = {
   label: string;
   type: "category" | "product";
 };
+
+function dedupeFeaturedById(items: FeaturedItem[]): FeaturedItem[] {
+  const seen = new Set<string>();
+  return items.filter((f) => {
+    if (seen.has(f.id)) return false;
+    seen.add(f.id);
+    return true;
+  });
+}
 
 type ContentItem = {
   id: string;
@@ -73,8 +83,10 @@ export default function TerminalDetailDisplayContentPage({
   const [accentColor, setAccentColor] = useState("#D0FE1D");
 
   const addFeatured = (item: FeaturedItem) => {
-    if (selectedFeatured.some((f) => f.id === item.id)) return;
-    setSelectedFeatured((prev) => [...prev, item]);
+    setSelectedFeatured((prev) => {
+      if (prev.some((f) => f.id === item.id)) return prev;
+      return dedupeFeaturedById([...prev, item]);
+    });
   };
 
   const removeFeatured = (itemId: string) => {
@@ -109,8 +121,12 @@ export default function TerminalDetailDisplayContentPage({
   const saveChanges = async () => {
     try {
       setIsSaving(true);
-      const featuredCatIds = selectedFeatured.filter((f) => f.type === "category").map((f) => f.id.replace(/^cat-/, ""));
-      const featuredProdIds = selectedFeatured.filter((f) => f.type === "product").map((f) => f.id.replace(/^prod-/, ""));
+      const featuredCatIds = [
+        ...new Set(selectedFeatured.filter((f) => f.type === "category").map((f) => f.id.replace(/^cat-/, ""))),
+      ];
+      const featuredProdIds = [
+        ...new Set(selectedFeatured.filter((f) => f.type === "product").map((f) => f.id.replace(/^prod-/, ""))),
+      ];
       await orderzillaApi.dashboard.terminals.displayContent.update(id, {
         body: {
           idle_screen: {
@@ -153,18 +169,18 @@ export default function TerminalDetailDisplayContentPage({
         const categories = (categoriesRes as { categories?: Array<{ id?: string; name?: string }> })?.categories ?? [];
         const products = (productsRes as { products?: Array<{ id?: string; name?: string }> })?.products ?? [];
         if (categories.length > 0 || products.length > 0) {
-          const opts: FeaturedItem[] = [
-            ...categories.slice(0, 5).map((c) => ({
+          const opts: FeaturedItem[] = dedupeFeaturedById([
+            ...categories.map((c) => ({
               id: `cat-${c.id ?? ""}`,
               label: `${c.name ?? "Category"} (Cat)`,
               type: "category" as const,
             })),
-            ...products.slice(0, 5).map((p) => ({
+            ...products.map((p) => ({
               id: `prod-${p.id ?? ""}`,
               label: `${p.name ?? "Product"} (Prod)`,
               type: "product" as const,
             })),
-          ];
+          ]).slice(0, 12);
           setFeaturedOptions(opts);
         } else {
           setFeaturedOptions([]);
@@ -185,7 +201,7 @@ export default function TerminalDetailDisplayContentPage({
           setTheme(displayData.theme ?? "brand");
           setAccentColor(displayData.accent_color ?? "#D0FE1D");
           if (displayData.featured_categories?.length || displayData.featured_products?.length) {
-            const feat: FeaturedItem[] = [
+            const feat: FeaturedItem[] = dedupeFeaturedById([
               ...(displayData.featured_categories ?? []).map((cid) => {
                 const c = categories.find((x) => x.id === cid);
                 return { id: `cat-${cid}`, label: `${c?.name ?? cid} (Cat)`, type: "category" as const };
@@ -194,8 +210,10 @@ export default function TerminalDetailDisplayContentPage({
                 const p = products.find((x) => x.id === pid);
                 return { id: `prod-${pid}`, label: `${p?.name ?? pid} (Prod)`, type: "product" as const };
               }),
-            ];
-            if (feat.length > 0) setSelectedFeatured(feat);
+            ]);
+            setSelectedFeatured(feat.length > 0 ? feat : []);
+          } else {
+            setSelectedFeatured([]);
           }
           if (displayData.content_items && Array.isArray(displayData.content_items) && displayData.content_items.length > 0) {
             setContentItems(
@@ -242,6 +260,9 @@ export default function TerminalDetailDisplayContentPage({
     return () => document.removeEventListener("mousedown", handler);
   }, [addDropdownOpen]);
 
+  const finalFeatured = useMemo(() => dedupeFeaturedById(selectedFeatured), [selectedFeatured]);
+  const finalContent = contentItems;
+
   if (isLoading) {
     return (
       <div className="p-4">
@@ -249,9 +270,6 @@ export default function TerminalDetailDisplayContentPage({
       </div>
     );
   }
-
-  const finalFeatured = selectedFeatured;
-  const finalContent = contentItems;
 
   return (
     <div className="p-4">
@@ -441,9 +459,9 @@ export default function TerminalDetailDisplayContentPage({
                     Choose featured categories/products
                   </label>
                   <div className="flex flex-wrap items-center gap-2 min-h-[40px] rounded-lg border border-[#e4e6ea] bg-white px-3 py-2">
-                    {finalFeatured.map((item) => (
+                    {finalFeatured.map((item, fIdx) => (
                       <span
-                        key={item.id}
+                        key={`featured-chip-${item.id}-${fIdx}`}
                         className="inline-flex items-center gap-1 rounded-full bg-[#f0f4e8] px-2.5 py-1 text-[12px] font-medium text-[#1d2512]"
                       >
                         {item.label}
@@ -470,9 +488,9 @@ export default function TerminalDetailDisplayContentPage({
                         <div className="absolute left-0 top-full mt-1 z-10 min-w-[180px] rounded-lg border border-[#e4e6ea] bg-white py-1 shadow-lg">
                           {featuredOptions
                             .filter((o) => !finalFeatured.some((f) => f.id === o.id))
-                            .map((o) => (
+                            .map((o, optIdx) => (
                               <button
-                                key={o.id}
+                                key={`add-dropdown-${o.type}-${o.id}-i${optIdx}`}
                                 type="button"
                                 className="block w-full text-left px-3 py-2 text-[13px] hover:bg-[#f9fafb]"
                                 onClick={() => {
@@ -496,7 +514,7 @@ export default function TerminalDetailDisplayContentPage({
                   <div className="space-y-2">
                     {finalContent.map((item, index) => (
                       <div
-                        key={item.id}
+                        key={`content-order-${item.id || "row"}-${index}`}
                         className="flex items-center gap-3 rounded-lg border border-[#e5e7eb] bg-white px-3 py-2"
                       >
                         <GripVertical size={18} className="text-[#9ca3af] shrink-0 cursor-grab" />
@@ -630,7 +648,7 @@ export default function TerminalDetailDisplayContentPage({
                 >
                   {idleImageUrl ? (
                     <img
-                      src={idleImageUrl}
+                      src={proxiedImageSrc(idleImageUrl) ?? idleImageUrl}
                       alt=""
                       className="absolute inset-0 w-full h-full object-cover opacity-90"
                     />
@@ -648,9 +666,9 @@ export default function TerminalDetailDisplayContentPage({
                 {/* Featured categories/products (when enabled) */}
                 {showFeaturedProducts && finalFeatured.length > 0 && (
                   <div className="px-3 py-2 flex gap-2 overflow-x-auto shrink-0">
-                    {finalFeatured.map((item) => (
+                    {finalFeatured.map((item, fIdx) => (
                       <div
-                        key={item.id}
+                        key={`preview-featured-${item.id}-${fIdx}`}
                         className={`shrink-0 rounded-lg px-3 py-2 min-w-[72px] text-center cursor-pointer transition-colors ${
                           theme === "dark"
                             ? "bg-[#374151] hover:bg-[#4b5563]"
@@ -675,9 +693,9 @@ export default function TerminalDetailDisplayContentPage({
                 {/* Content items (banners, etc.) */}
                 {finalContent.length > 0 && (
                   <div className="px-3 py-2 space-y-1.5 flex-1 overflow-y-auto">
-                    {finalContent.map((item) => (
+                    {finalContent.map((item, cIdx) => (
                       <div
-                        key={item.id}
+                        key={`preview-content-${item.id || "row"}-${cIdx}`}
                         className={`rounded-lg px-3 py-2 flex items-center gap-2 ${
                           item.type === "banner"
                             ? ""

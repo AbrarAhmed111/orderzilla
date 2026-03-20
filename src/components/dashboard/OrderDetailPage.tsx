@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { isAxiosError } from "axios";
 import { ArrowLeft, Printer } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api";
 import type { components } from "@/types/orderzilla-openapi";
+import { axiosInstance } from "@/utils/axios";
 
 type OrderDetailPageProps = {
   id: string;
@@ -21,6 +23,7 @@ type ExtendedOrder = OrderDetail & {
   staff_override?: string;
   transaction_id?: string;
   card_last4?: string;
+  currency?: string;
 };
 
 const EMPTY_VALUE = "—";
@@ -75,29 +78,137 @@ function toDisplayValue(value: unknown, fallback: string): string {
   return fallback;
 }
 
+/** Backend may return the order at the root or nested (e.g. data / order / payload). */
+function isProbablyOrderDetail(o: Record<string, unknown>): boolean {
+  if (typeof o.error === "string" && !o.order_number && !o.id && !Array.isArray(o.items)) {
+    return false;
+  }
+  return (
+    typeof o.order_number !== "undefined" ||
+    typeof o.id !== "undefined" ||
+    Array.isArray(o.items) ||
+    typeof o.status === "string" ||
+    typeof o.total_gross !== "undefined" ||
+    typeof o.subtotal_gross !== "undefined"
+  );
+}
+
+function normalizeOrderDetailPayload(raw: unknown): ExtendedOrder | null {
+  let cur: unknown =
+    typeof raw === "string"
+      ? (() => {
+          try {
+            return JSON.parse(raw) as unknown;
+          } catch {
+            return null;
+          }
+        })()
+      : raw;
+
+  if (cur == null || typeof cur !== "object") return null;
+
+  const maxDepth = 8;
+  for (let d = 0; d < maxDepth && cur && typeof cur === "object" && !Array.isArray(cur); d++) {
+    const o = cur as Record<string, unknown>;
+    if (isProbablyOrderDetail(o)) return o as ExtendedOrder;
+    const inner =
+      o.order ??
+      o.order_detail ??
+      o.orderDetail ??
+      o.data ??
+      o.payload ??
+      o.result ??
+      o.body ??
+      o.resource ??
+      o.attributes;
+    if (inner != null && typeof inner === "object") {
+      cur = inner;
+      continue;
+    }
+    break;
+  }
+
+  if (cur && typeof cur === "object" && !Array.isArray(cur) && isProbablyOrderDetail(cur as Record<string, unknown>)) {
+    return cur as ExtendedOrder;
+  }
+
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>;
+    if (Object.keys(o).length > 0 && !("error" in o && !("id" in o) && !("order_number" in o))) {
+      return raw as ExtendedOrder;
+    }
+  }
+  return null;
+}
+
+function firstTaxRow(order: ExtendedOrder | null | undefined): { tax?: unknown; rate?: number } | undefined {
+  const tb = order?.tax_breakdown;
+  if (Array.isArray(tb) && tb.length > 0) return tb[0] as { tax?: unknown; rate?: number };
+  return undefined;
+}
+
 export default function OrderDetailPage({ id }: OrderDetailPageProps) {
+  const resolvedOrderId = useMemo(() => {
+    try {
+      return decodeURIComponent(id).trim();
+    } catch {
+      return id.trim();
+    }
+  }, [id]);
+
   const [order, setOrder] = useState<ExtendedOrder | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
 
-  const fetchOrder = async () => {
+  const fetchOrder = useCallback(async () => {
+    if (!resolvedOrderId) {
+      setError("Missing order id.");
+      setOrder(null);
+      setIsLoading(false);
+      return;
+    }
     try {
       setIsLoading(true);
       setError("");
-      const data = await orderzillaApi.dashboard.orders.byId(id);
-      setOrder(data as ExtendedOrder);
-    } catch {
-      setError("Failed to load order details.");
+      const res = await axiosInstance.get<unknown>(
+        `/v1/dashboard/orders/${encodeURIComponent(resolvedOrderId)}`,
+        { validateStatus: () => true },
+      );
+      if (res.status < 200 || res.status >= 300) {
+        setError(`Failed to load order details (HTTP ${res.status}).`);
+        setOrder(null);
+        return;
+      }
+      const normalized = normalizeOrderDetailPayload(res.data);
+      if (!normalized) {
+        setError("Failed to load order details. Unexpected response from server.");
+        setOrder(null);
+        return;
+      }
+      setOrder(normalized);
+    } catch (err: unknown) {
+      if (isAxiosError(err) && err.response?.data !== undefined) {
+        const normalized = normalizeOrderDetailPayload(err.response.data);
+        if (normalized) {
+          setOrder(normalized);
+          setError("");
+          return;
+        }
+        const st = err.response.status;
+        setError(`Failed to load order details (${st}).`);
+      } else {
+        setError("Failed to load order details.");
+      }
       setOrder(null);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [resolvedOrderId]);
 
   useEffect(() => {
-    fetchOrder();
-  }, [id]);
+    void fetchOrder();
+  }, [fetchOrder]);
 
   const mapStatusLabel = (status?: string) => {
     if (status === "PREPARING") return "Preparing";
@@ -111,9 +222,10 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
   const statusLabel = mapStatusLabel(order?.status ?? "PENDING");
 
   const updateStatus = async (status: "CONFIRMED" | "PREPARING" | "READY" | "CANCELLED" | "COMPLETED") => {
+    if (!resolvedOrderId) return;
     try {
       setIsUpdating(true);
-      await orderzillaApi.dashboard.orders.updateStatus(id, { body: { status } });
+      await orderzillaApi.dashboard.orders.updateStatus(resolvedOrderId, { body: { status } });
       toast.success("Order status updated.");
       await fetchOrder();
     } catch {
@@ -157,12 +269,15 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
     payment_confirmed_at?: string | null;
     sent_to_kitchen_at?: string | null;
     preparing_at?: string | null;
+    ready_at?: string | null;
     completed_at?: string | null;
   };
   const paymentConfirmedAt = orderExtended?.payment_confirmed_at;
   const sentToKitchenAt = orderExtended?.sent_to_kitchen_at;
   const preparingAt = orderExtended?.preparing_at;
+  const readyAt = orderExtended?.ready_at;
   const completedAt = orderExtended?.completed_at ?? order?.completed_at;
+  const currencyCode = orderExtended?.currency?.trim() || "CHF";
 
   const timeline = timelineSteps.map((step, index) => {
     const done =
@@ -187,11 +302,15 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
       const ts = preparingAt ?? (createdAtValid && currentStepIndex >= 3 ? createdAt : null);
       if (ts && typeof ts === "string" && isValidDate(new Date(ts))) time = formatDateTime(ts);
     }
-    if (step.key === "ready" && currentStepIndex >= 4 && createdAtValid) {
-      const d = new Date(createdAt!);
-      if (isValidDate(d)) {
-        d.setMinutes(d.getMinutes() + 4);
-        time = formatDateTime(d.toISOString());
+    if (step.key === "ready") {
+      if (readyAt && typeof readyAt === "string" && isValidDate(new Date(readyAt))) {
+        time = formatDateTime(readyAt);
+      } else if (currentStepIndex >= 4 && createdAtValid) {
+        const d = new Date(createdAt!);
+        if (isValidDate(d)) {
+          d.setMinutes(d.getMinutes() + 4);
+          time = formatDateTime(d.toISOString());
+        }
       }
     }
     if (step.key === "completed") {
@@ -215,8 +334,9 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
       : [];
 
   const subtotal = toDisplayValue(order?.subtotal_gross, EMPTY_VALUE);
-  const vat = toDisplayValue(order?.tax_breakdown?.[0]?.tax, EMPTY_VALUE);
-  const vatRate = typeof order?.tax_breakdown?.[0]?.rate === "number" ? order.tax_breakdown[0].rate : 0;
+  const tax0 = firstTaxRow(order);
+  const vat = toDisplayValue(tax0?.tax, EMPTY_VALUE);
+  const vatRate = typeof tax0?.rate === "number" ? tax0.rate : 0;
   const discount = toDisplayValue(order?.discount_amount, "0.00");
   const total = toDisplayValue(order?.total_gross, EMPTY_VALUE);
 
@@ -243,8 +363,8 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
     (order as ExtendedOrder)?.transaction_id,
     EMPTY_VALUE,
   );
-  const paidAmount = total !== EMPTY_VALUE ? `$${total}` : EMPTY_VALUE;
-  const vatBreakdown = vat !== EMPTY_VALUE ? `$${vat} (${vatRate}%)` : EMPTY_VALUE;
+  const paidAmount = total !== EMPTY_VALUE ? `${currencyCode} ${total}` : EMPTY_VALUE;
+  const vatBreakdown = vat !== EMPTY_VALUE ? `${currencyCode} ${vat} (${vatRate}%)` : EMPTY_VALUE;
   const paymentStatus = (toDisplayValue(order?.payment_status, "")).toLowerCase() === "paid" ? "paid" : "paid";
 
   const terminal = toDisplayValue(
@@ -306,7 +426,7 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
             </Link>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <h1 className="text-[28px] sm:text-[36px] lg:text-[42px] leading-none font-extrabold text-[#171d27]">
-                Order #{toDisplayValue(order?.order_number, id)}
+                Order #{toDisplayValue(order?.order_number, resolvedOrderId)}
               </h1>
               <span
                 className={`rounded-full px-3 py-1 text-[13px] font-semibold ${
@@ -392,7 +512,15 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
                               Selected modifiers
                             </p>
                             {(item.extras ?? []).map((extra, i) => {
-                              const name = toDisplayValue((extra as { extra_name?: string })?.extra_name, "");
+                              const ex = extra as {
+                                extra_name?: string;
+                                option_name?: string;
+                                name?: string;
+                              };
+                              const name = toDisplayValue(
+                                ex.extra_name ?? ex.option_name ?? ex.name,
+                                "",
+                              );
                               return (
                                 <p key={i} className="text-[13px] text-[#6e7785]">
                                   {name.toLowerCase().startsWith("no ") ? name : name ? `+ ${name}` : ""}
@@ -407,10 +535,10 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
                       </div>
                       <div className="text-right shrink-0">
                         <p className="text-[14px] font-semibold text-[#2a313d]">
-                          {item.quantity} x ${item.unit_price}
+                          {item.quantity} x {currencyCode} {item.unit_price}
                         </p>
                         <p className="text-[15px] font-bold text-[#1f2733]">
-                          ${item.total_gross_price}
+                          {currencyCode} {item.total_gross_price}
                         </p>
                       </div>
                     </div>
@@ -421,19 +549,23 @@ export default function OrderDetailPage({ id }: OrderDetailPageProps) {
               <div className="mt-4 border-t border-[#eceff3] pt-4 space-y-2">
                 <div className="flex justify-end gap-8 text-[15px]">
                   <span className="text-[#3a4350]">Subtotal</span>
-                  <span className="font-semibold text-[#1d2430]">{subtotal !== EMPTY_VALUE ? `$${subtotal}` : subtotal}</span>
+                  <span className="font-semibold text-[#1d2430]">
+                    {subtotal !== EMPTY_VALUE ? `${currencyCode} ${subtotal}` : subtotal}
+                  </span>
                 </div>
                 <div className="flex justify-end gap-8 text-[15px]">
                   <span className="text-[#3a4350]">VAT ({vatRate}%)</span>
-                  <span className="font-semibold text-[#1d2430]">{vat !== EMPTY_VALUE ? `$${vat}` : vat}</span>
+                  <span className="font-semibold text-[#1d2430]">
+                    {vat !== EMPTY_VALUE ? `${currencyCode} ${vat}` : vat}
+                  </span>
                 </div>
                 <div className="flex justify-end gap-8 text-[15px]">
                   <span className="text-[#3a4350]">Discount (if applied)</span>
-                  <span className="font-semibold text-[#1d2430]">- ${discount}</span>
+                  <span className="font-semibold text-[#1d2430]">- {currencyCode} {discount}</span>
                 </div>
                 <div className="flex justify-end gap-8 text-[18px] font-extrabold text-[#111822]">
                   <span>Final Total</span>
-                  <span>{total !== EMPTY_VALUE ? `$${total}` : total}</span>
+                  <span>{total !== EMPTY_VALUE ? `${currencyCode} ${total}` : total}</span>
                 </div>
               </div>
             </article>

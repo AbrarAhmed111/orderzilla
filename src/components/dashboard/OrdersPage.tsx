@@ -1,5 +1,6 @@
 "use client";
 
+import { isAxiosError } from "axios";
 import { Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -9,6 +10,7 @@ import { Skeleton, TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
 import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api";
+import type { OrderListStatusCounts } from "@/lib/api/orderzilla-api";
 import type { components, paths } from "@/types/orderzilla-openapi";
 
 type ApiOrder = components["schemas"]["OrderSummary"];
@@ -24,6 +26,54 @@ type UIRow = {
   total: string;
   status: "Pending" | "Confirmed" | "Preparing" | "Ready" | "Completed" | "Cancelled";
 };
+
+type StatusTabCounts = Record<"all" | UIRow["status"], number>;
+
+function tabCountsFromApi(
+  sc: OrderListStatusCounts | undefined,
+  totalItemsFallback: number,
+  pageRowCount: number,
+): StatusTabCounts | null {
+  if (!sc || typeof sc !== "object") return null;
+  const o = sc as Record<string, number>;
+  const g = (upper: string, lower: string) => {
+    const v = o[upper] ?? o[lower];
+    return typeof v === "number" ? v : 0;
+  };
+  const pending = g("PENDING", "pending");
+  const confirmed = g("CONFIRMED", "confirmed");
+  const preparing = g("PREPARING", "preparing");
+  const ready = g("READY", "ready");
+  const completed = g("COMPLETED", "completed");
+  const cancelled = g("CANCELLED", "cancelled");
+  const sum = pending + confirmed + preparing + ready + completed + cancelled;
+  const hasAnyCount = Object.values(o).some((x) => typeof x === "number");
+  if (!hasAnyCount && sum === 0) return null;
+  const all =
+    typeof o.all === "number"
+      ? o.all
+      : typeof o.total === "number"
+        ? o.total
+        : sum > 0
+          ? sum
+          : totalItemsFallback > 0
+            ? totalItemsFallback
+            : pageRowCount;
+  return {
+    all,
+    Pending: pending,
+    Confirmed: confirmed,
+    Preparing: preparing,
+    Ready: ready,
+    Completed: completed,
+    Cancelled: cancelled,
+  };
+}
+
+function formatOrderTotal(totalGross: unknown, currencyCode: string): string {
+  if (totalGross == null || typeof totalGross === "object") return `${currencyCode} 0.00`;
+  return `${currencyCode} ${String(totalGross)}`;
+}
 
 const fallbackOrders: UIRow[] = [];
 
@@ -173,7 +223,9 @@ export default function OrdersPage() {
     useState(Number.isFinite(initialLimit) && initialLimit > 0 ? initialLimit : 20);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
+  const [statusTabCounts, setStatusTabCounts] = useState<StatusTabCounts | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [isDeletingOrders, setIsDeletingOrders] = useState(false);
   const [locationOptions, setLocationOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [terminalOptions, setTerminalOptions] = useState<Array<{ label: string; value: string; locationId?: string }>>([]);
   const [isCreateOrderOpen, setIsCreateOrderOpen] = useState(false);
@@ -184,6 +236,7 @@ export default function OrdersPage() {
   const [createOrderPaymentMethod, setCreateOrderPaymentMethod] = useState("CARD");
   const [createOrderItems, setCreateOrderItems] = useState<Array<{ product_id: string; quantity: number }>>([{ product_id: "", quantity: 1 }]);
   const [createOrderProducts, setCreateOrderProducts] = useState<Array<{ id: string; name: string }>>([]);
+  const [createOrderProductsLoading, setCreateOrderProductsLoading] = useState(false);
   const [createOrderStaffOverride, setCreateOrderStaffOverride] = useState("");
   const [isCreateOrderSubmitting, setIsCreateOrderSubmitting] = useState(false);
 
@@ -221,14 +274,17 @@ export default function OrdersPage() {
         query,
       });
       const items = (response?.orders ?? []) as ApiOrder[];
+      const currencyCode =
+        (response as { currency?: string }).currency?.trim() ||
+        (items[0] as { currency?: string } | undefined)?.currency?.trim() ||
+        "CHF";
       const mapped: UIRow[] = items.map((item) => {
         const idKey = toDisplayStr(item.id ?? item.order_number, "") || crypto.randomUUID();
         const orderNum = toDisplayStr(item.order_number, "");
         const totalGross = item.total_gross;
-        const totalStr =
-          totalGross != null && typeof totalGross !== "object"
-            ? `$${totalGross}`
-            : "$0.00";
+        const rowCurrency =
+          (item as { currency?: string }).currency?.trim() || currencyCode;
+        const totalStr = formatOrderTotal(totalGross, rowCurrency);
         const itemCount = (item as { item_count?: number }).item_count;
         return {
           idKey,
@@ -244,9 +300,13 @@ export default function OrdersPage() {
       });
       setRows(mapped);
       const pagination = response?.pagination;
-      setTotalItems(pagination?.total_items ?? mapped.length);
+      const totalItemsResolved = pagination?.total_items ?? mapped.length;
+      setTotalItems(totalItemsResolved);
       setTotalPages(pagination?.total_pages ?? 1);
       setPage(pagination?.current_page ?? targetPage);
+      setStatusTabCounts(
+        tabCountsFromApi(response?.status_counts, totalItemsResolved, mapped.length),
+      );
     } catch {
       setError("Failed to load orders.");
     } finally {
@@ -322,7 +382,7 @@ export default function OrdersPage() {
   ]);
 
   const orderTabs = useMemo(() => {
-    const counts = rows.reduce(
+    const fallback = rows.reduce(
       (acc, row) => {
         acc.all += 1;
         acc[row.status] += 1;
@@ -336,8 +396,9 @@ export default function OrdersPage() {
         Ready: 0,
         Completed: 0,
         Cancelled: 0,
-      } as Record<"all" | UIRow["status"], number>,
+      } as StatusTabCounts,
     );
+    const counts = statusTabCounts ?? fallback;
 
     return [
       { label: "All Orders", count: counts.all, color: "bg-[#d6ff3e]" },
@@ -348,21 +409,15 @@ export default function OrdersPage() {
       { label: "Completed", count: counts.Completed, color: "bg-[#6bdc95]" },
       { label: "Cancelled", count: counts.Cancelled, color: "bg-[#f06f73]" },
     ];
-  }, [rows]);
+  }, [rows, statusTabCounts]);
 
   const visibleRows = useMemo(() => {
     return rows.filter((row) => {
       const matchesPayment =
         paymentFilter === "all" || paymentFilterValue(row.payment) === paymentFilter;
-      const searchValue = search.trim().toLowerCase();
-      const matchesSearch =
-        searchValue.length === 0 ||
-        row.id.toLowerCase().includes(searchValue) ||
-        row.payment.toLowerCase().includes(searchValue) ||
-        row.terminal.toLowerCase().includes(searchValue);
-      return matchesPayment && matchesSearch;
+      return matchesPayment;
     });
-  }, [rows, paymentFilter, search]);
+  }, [rows, paymentFilter]);
 
   const allVisibleSelected =
     visibleRows.length > 0 && visibleRows.every((row) => selectedIds.includes(row.idKey));
@@ -377,17 +432,6 @@ export default function OrdersPage() {
       toast("Select at least one order first.");
       return;
     }
-
-    setRows((prev) =>
-      prev.map((row) =>
-        ids.includes(row.idKey)
-          ? {
-              ...row,
-              status,
-            }
-          : row,
-      ),
-    );
 
     const results = await Promise.allSettled(
       selected.map((row) =>
@@ -406,8 +450,8 @@ export default function OrdersPage() {
     }
     if (failedCount > 0) {
       toast.error(`Failed to update ${failedCount} order${failedCount > 1 ? "s" : ""}.`);
-      fetchOrders(page, pageSize);
     }
+    await fetchOrders(page, pageSize);
 
     if (options?.clearSelection) {
       setSelectedIds([]);
@@ -503,15 +547,18 @@ export default function OrdersPage() {
         const query = buildOrdersQuery(currentPage, exportLimit);
         const response = await orderzillaApi.dashboard.orders.list({ query });
         const items = (response?.orders ?? []) as ApiOrder[];
+        const pageCurrency =
+          (response as { currency?: string }).currency?.trim() ||
+          (items[0] as { currency?: string } | undefined)?.currency?.trim() ||
+          "CHF";
         allRows.push(
           ...items.map((item) => {
             const idKey = toDisplayStr(item.id ?? item.order_number, "") || crypto.randomUUID();
             const orderNum = toDisplayStr(item.order_number, "");
             const totalGross = item.total_gross;
-            const totalStr =
-              totalGross != null && typeof totalGross !== "object"
-                ? `$${totalGross}`
-                : "$0.00";
+            const rowCurrency =
+              (item as { currency?: string }).currency?.trim() || pageCurrency;
+            const totalStr = formatOrderTotal(totalGross, rowCurrency);
             const itemCount = (item as { item_count?: number }).item_count;
             return {
               idKey,
@@ -585,17 +632,55 @@ export default function OrdersPage() {
     setIsCreateOrderOpen(true);
   };
 
+  /** Order creation accepts only products on the selected terminal's menu; global catalog IDs often return invalid_product. */
   useEffect(() => {
-    if (isCreateOrderOpen) {
-      orderzillaApi.dashboard.products
-        .list()
-        .then((res) => {
-          const prods = (res as { products?: { id?: string; name?: string }[] })?.products ?? [];
-          setCreateOrderProducts(prods.map((p) => ({ id: p.id ?? "", name: p.name ?? "Unnamed" })));
-        })
-        .catch(() => setCreateOrderProducts([]));
+    if (!isCreateOrderOpen) {
+      setCreateOrderProducts([]);
+      setCreateOrderProductsLoading(false);
+      return;
     }
-  }, [isCreateOrderOpen]);
+    if (!createOrderTerminalId) {
+      setCreateOrderProducts([]);
+      setCreateOrderProductsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setCreateOrderProductsLoading(true);
+    orderzillaApi.dashboard.terminals.products
+      .list(createOrderTerminalId)
+      .then((res) => {
+        if (cancelled) return;
+        const prods = (res?.products ?? []) as Array<{
+          id?: string;
+          name?: string;
+          is_visible?: boolean;
+          is_sold_out?: boolean;
+        }>;
+        const mapped = prods
+          .filter((p) => Boolean(p.id) && p.is_visible !== false)
+          .map((p) => ({
+            id: p.id as string,
+            name: p.is_sold_out ? `${p.name ?? "Unnamed"} (sold out)` : (p.name ?? "Unnamed"),
+          }));
+        setCreateOrderProducts(mapped);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCreateOrderProducts([]);
+          toast.error("Could not load products for this terminal.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCreateOrderProductsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreateOrderOpen, createOrderTerminalId]);
+
+  useEffect(() => {
+    setCreateOrderItems([{ product_id: "", quantity: 1 }]);
+  }, [createOrderTerminalId]);
 
   const createOrderTerminals = useMemo(
     () =>
@@ -631,8 +716,20 @@ export default function OrdersPage() {
       toast.success("Order created.");
       setIsCreateOrderOpen(false);
       fetchOrders(page, pageSize);
-    } catch {
-      toast.error("Failed to create order.");
+    } catch (err: unknown) {
+      const data = isAxiosError(err) ? err.response?.data : undefined;
+      if (data && typeof data === "object" && data !== null && "error" in data) {
+        const o = data as { error?: string; product_id?: string; message?: string };
+        if (o.error === "invalid_product" && o.product_id) {
+          toast.error(
+            `This product is not on the selected terminal's menu (${o.product_id.slice(0, 8)}…). Pick a terminal, then choose items from its list.`,
+          );
+        } else {
+          toast.error(o.message ?? String(o.error ?? "Failed to create order."));
+        }
+      } else {
+        toast.error("Failed to create order.");
+      }
     } finally {
       setIsCreateOrderSubmitting(false);
     }
@@ -656,9 +753,37 @@ export default function OrdersPage() {
     );
   };
 
+  const deleteOrdersByIds = async (ids: string[]) => {
+    const unique = Array.from(new Set(ids.filter(Boolean)));
+    if (unique.length === 0) {
+      toast("Select at least one order first.");
+      return;
+    }
+    setIsDeletingOrders(true);
+    const loadingToast = toast.loading("Deleting orders...");
+    try {
+      const results = await Promise.allSettled(unique.map((id) => orderzillaApi.dashboard.orders.remove(id)));
+      const ok = results.filter((r) => r.status === "fulfilled").length;
+      const fail = results.length - ok;
+      if (ok > 0) {
+        toast.success(`Deleted ${ok} order${ok > 1 ? "s" : ""}.`);
+      }
+      if (fail > 0) {
+        toast.error(`Failed to delete ${fail} order${fail > 1 ? "s" : ""}.`);
+      }
+      setSelectedIds([]);
+      await fetchOrders(page, pageSize);
+    } catch {
+      toast.error("Failed to delete orders.");
+      await fetchOrders(page, pageSize);
+    } finally {
+      toast.dismiss(loadingToast);
+      setIsDeletingOrders(false);
+    }
+  };
+
   const deleteSelected = () => {
-    setRows((prev) => prev.filter((row) => !selectedIds.includes(row.idKey)));
-    setSelectedIds([]);
+    void deleteOrdersByIds(selectedIds);
   };
 
   const resetFilters = () => {
@@ -950,8 +1075,7 @@ export default function OrdersPage() {
                             },
                             {
                               label: "Delete order",
-                              onClick: () =>
-                                setRows((prev) => prev.filter((r) => r.idKey !== order.idKey)),
+                              onClick: () => void deleteOrdersByIds([order.idKey]),
                               danger: true,
                             },
                           ]}
@@ -994,9 +1118,10 @@ export default function OrdersPage() {
             <button
               type="button"
               onClick={deleteSelected}
-              className="h-9 rounded-lg bg-[#ef4a4c] px-4 text-[12px] font-semibold text-white"
+              disabled={isDeletingOrders || selectedIds.length === 0}
+              className="h-9 rounded-lg bg-[#ef4a4c] px-4 text-[12px] font-semibold text-white disabled:opacity-50"
             >
-              Delete
+              {isDeletingOrders ? "Deleting..." : "Delete"}
             </button>
           </div>
         </div>
@@ -1111,20 +1236,33 @@ export default function OrdersPage() {
                   <button
                     type="button"
                     onClick={addCreateOrderItem}
-                    className="text-[12px] font-semibold text-[#6385b5]"
+                    disabled={!createOrderTerminalId || createOrderProductsLoading}
+                    className="text-[12px] font-semibold text-[#6385b5] disabled:opacity-50 disabled:pointer-events-none"
                   >
                     + Add item
                   </button>
                 </div>
+                {!createOrderTerminalId ? (
+                  <p className="text-[12px] text-[#6e7785] mb-2">Select a terminal to load its menu.</p>
+                ) : createOrderProductsLoading ? (
+                  <p className="text-[12px] text-[#6e7785] mb-2">Loading menu…</p>
+                ) : createOrderProducts.length === 0 ? (
+                  <p className="text-[12px] text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-2">
+                    No visible products on this terminal. Assign products under Terminals → Display / products for this device, then try again.
+                  </p>
+                ) : null}
                 <div className="space-y-2 max-h-[180px] overflow-y-auto">
                   {createOrderItems.map((item, idx) => (
                     <div key={idx} className="flex gap-2 items-center">
                       <select
                         value={item.product_id}
                         onChange={(e) => updateCreateOrderItem(idx, "product_id", e.target.value)}
-                        className="h-9 flex-1 rounded-lg border border-[#dfe3e8] px-2 text-[12px]"
+                        disabled={!createOrderTerminalId || createOrderProductsLoading}
+                        className="h-9 flex-1 rounded-lg border border-[#dfe3e8] px-2 text-[12px] disabled:bg-[#f3f4f6] disabled:text-[#9ca3af]"
                       >
-                        <option value="">Select product</option>
+                        <option value="">
+                          {createOrderProductsLoading ? "Loading…" : "Select product"}
+                        </option>
                         {createOrderProducts.map((p) => (
                           <option key={p.id} value={p.id}>
                             {p.name}

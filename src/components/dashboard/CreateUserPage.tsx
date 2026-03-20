@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { User, X } from "lucide-react";
 import toast from "react-hot-toast";
 import { orderzillaApi } from "@/lib/api";
+import { proxiedImageSrc } from "@/lib/media-url";
 
 const EMPTY_VALUE = "—";
 
@@ -54,6 +55,8 @@ export default function CreateUserPage() {
   const [canManageProducts, setCanManageProducts] = useState(true);
   const [canManageLoyalty, setCanManageLoyalty] = useState(false);
   const [isActive, setIsActive] = useState(true);
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isFormValid =
@@ -102,6 +105,7 @@ export default function CreateUserPage() {
           can_manage_products: canManageProducts,
           can_manage_loyalty: canManageLoyalty,
           is_active: isActive,
+          avatar_url: avatarUrl.trim() || undefined,
         },
       });
       toast.success("User created.");
@@ -211,15 +215,31 @@ export default function CreateUserPage() {
                 <div>
                   <label className="block text-[14px] font-semibold text-[#363f4c] mb-1">Avatar</label>
                   <div className="flex items-center gap-4">
-                    <div className="h-20 w-20 rounded-full bg-[#e5e7eb] flex items-center justify-center">
-                      <User size={36} className="text-[#9ca3af]" />
+                    <div className="h-20 w-20 shrink-0 rounded-full overflow-hidden bg-[#e5e7eb] flex items-center justify-center">
+                      {avatarUrl.trim() && !avatarLoadError ? (
+                        <img
+                          src={proxiedImageSrc(avatarUrl.trim()) ?? avatarUrl.trim()}
+                          alt=""
+                          className="h-full w-full object-cover"
+                          onError={() => setAvatarLoadError(true)}
+                        />
+                      ) : (
+                        <User size={36} className="text-[#9ca3af]" />
+                      )}
                     </div>
-                    <button
-                      type="button"
-                      className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[13px] font-semibold text-[#414855]"
-                    >
-                      Upload
-                    </button>
+                    <div className="flex-1 min-w-0">
+                      <input
+                        type="url"
+                        value={avatarUrl}
+                        onChange={(e) => {
+                          setAvatarUrl(e.target.value);
+                          setAvatarLoadError(false);
+                        }}
+                        placeholder="https://example.com/avatar.jpg"
+                        className="h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[14px]"
+                      />
+                      <p className="mt-1 text-[11px] text-[#6e7785]">Paste an image URL to set the avatar.</p>
+                    </div>
                   </div>
                 </div>
               </div>

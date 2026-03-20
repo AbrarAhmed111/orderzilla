@@ -36,6 +36,12 @@ type ApiTerminal = {
   vitals?: {
     battery_level?: number;
     storage_free_mb?: number;
+    storage_total_mb?: number;
+    storage_used_percent?: number;
+    memory_used_percent?: number;
+    memory_used_mb?: number;
+    memory_total_mb?: number;
+    cpu_load_percent?: number;
     network_type?: string;
   } | null;
 };
@@ -54,6 +60,43 @@ type AssignedLocation = {
   enabled: boolean;
 };
 
+type LocationRow = { id: string; name: string };
+
+function assignmentsFromTerminal(terminal: Record<string, unknown>): { id: string; enabled: boolean }[] {
+  const raw = terminal.assigned_locations;
+  if (Array.isArray(raw) && raw.length > 0) {
+    const out: { id: string; enabled: boolean }[] = [];
+    for (const item of raw) {
+      if (!item || typeof item !== "object") continue;
+      const o = item as Record<string, unknown>;
+      const lid = String(o.location_id ?? o.id ?? "").trim();
+      if (!lid) continue;
+      const enabled = o.enabled !== false && o.is_active !== false;
+      out.push({ id: lid, enabled });
+    }
+    return out;
+  }
+  const lid = terminal.location_id;
+  if (lid != null && String(lid).trim()) {
+    return [{ id: String(lid).trim(), enabled: true }];
+  }
+  return [];
+}
+
+function mergeAssignments(catalog: LocationRow[], fromApi: { id: string; enabled: boolean }[]): AssignedLocation[] {
+  const flag = new Map(fromApi.map((x) => [x.id, x.enabled]));
+  const base: AssignedLocation[] = catalog.map((c) => ({
+    id: c.id,
+    name: c.name,
+    enabled: flag.get(c.id) ?? false,
+  }));
+  for (const row of fromApi) {
+    if (!catalog.some((c) => c.id === row.id)) {
+      base.push({ id: row.id, name: "Location", enabled: row.enabled });
+    }
+  }
+  return base;
+}
 
 const commandOptions = [
   { label: "Reload Menu", value: "RELOAD_MENU" },
@@ -89,6 +132,10 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
     useState<(typeof commandOptions)[number]["value"]>("RELOAD_MENU");
   const [commandMessage, setCommandMessage] = useState("");
   const [assignedLocations, setAssignedLocations] = useState<AssignedLocation[]>([]);
+  const [locationCatalog, setLocationCatalog] = useState<LocationRow[]>([]);
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const [reassignSelection, setReassignSelection] = useState<Set<string>>(() => new Set());
+  const [isSavingLocations, setIsSavingLocations] = useState(false);
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
   const [error, setError] = useState("");
 
@@ -101,34 +148,53 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
   const statusLabel = terminal?.status ?? "ONLINE";
   const isActive = terminal?.is_active ?? true;
 
-  const storageUsedPct = terminal?.vitals?.storage_free_mb != null
-    ? Math.round(100 - (terminal.vitals.storage_free_mb / 25400) * 100)
-    : 65;
-  const storageUsedGb = terminal?.vitals?.storage_free_mb != null
-    ? ((25400 - terminal.vitals.storage_free_mb) / 1000).toFixed(1)
-    : "16.5";
-  const storageTotalGb = "25.4";
+  const v = terminal?.vitals;
+  const storageUsedPct =
+    typeof v?.storage_used_percent === "number"
+      ? Math.round(Math.min(100, Math.max(0, v.storage_used_percent)))
+      : v?.storage_free_mb != null && v?.storage_total_mb != null && v.storage_total_mb > 0
+        ? Math.round(100 - (v.storage_free_mb / v.storage_total_mb) * 100)
+        : null;
+  const storageUsedGb =
+    v?.storage_free_mb != null && v?.storage_total_mb != null
+      ? ((v.storage_total_mb - v.storage_free_mb) / 1000).toFixed(1)
+      : v?.storage_used_percent != null && v?.storage_total_mb != null
+        ? (((v.storage_total_mb * (v.storage_used_percent / 100)) / 1000)).toFixed(1)
+        : null;
+  const storageTotalGb =
+    v?.storage_total_mb != null ? (v.storage_total_mb / 1000).toFixed(1) : null;
 
-  const memoryUsedPct = 40;
-  const memoryUsedGb = "3.2";
-  const memoryTotalGb = "8";
+  const memoryUsedPct =
+    typeof v?.memory_used_percent === "number"
+      ? Math.round(Math.min(100, Math.max(0, v.memory_used_percent)))
+      : null;
+  const memoryUsedGb =
+    v?.memory_used_mb != null ? (v.memory_used_mb / 1000).toFixed(1) : null;
+  const memoryTotalGb = v?.memory_total_mb != null ? (v.memory_total_mb / 1000).toFixed(1) : null;
 
-  const cpuLoad = 25;
+  const cpuLoad =
+    typeof v?.cpu_load_percent === "number"
+      ? Math.round(Math.min(100, Math.max(0, v.cpu_load_percent)))
+      : null;
 
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
       setError("");
-      const response = (await orderzillaApi.dashboard.terminals.byId(id)) as ApiTerminal;
+      const [response, locRes] = await Promise.all([
+        orderzillaApi.dashboard.terminals.byId(id) as Promise<ApiTerminal>,
+        orderzillaApi.dashboard.locations.list().catch(() => ({ locations: [] as unknown[] })),
+      ]);
+      const locItems = (locRes?.locations ?? []) as { id?: string; name?: string }[];
+      const catalog: LocationRow[] = locItems
+        .filter((l) => Boolean(l.id))
+        .map((l) => ({ id: String(l.id), name: toDisplayValue(l.name, "Unnamed") }));
+      setLocationCatalog(catalog);
+
       setTerminal(response);
-      const apiLocs = (response as { assigned_locations?: AssignedLocation[] })?.assigned_locations;
-      setAssignedLocations(
-        Array.isArray(apiLocs) && apiLocs.length > 0
-          ? apiLocs
-          : response?.location_name
-            ? [{ id: "loc-1", name: response.location_name, enabled: true }]
-            : [],
-      );
+      const t = response as unknown as Record<string, unknown>;
+      const fromApi = assignmentsFromTerminal(t);
+      setAssignedLocations(mergeAssignments(catalog, fromApi));
       const apiActivity = (response as { activity_events?: ActivityEvent[] })?.activity_events;
       setActivityEvents(
         Array.isArray(apiActivity) && apiActivity.length > 0
@@ -192,10 +258,80 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
     }
   };
 
-  const toggleLocation = (locId: string) => {
-    setAssignedLocations((prev) =>
-      prev.map((l) => (l.id === locId ? { ...l, enabled: !l.enabled } : l)),
+  const saveLocationAssignments = useCallback(
+    async (next: AssignedLocation[]) => {
+      const enabled = next.filter((l) => l.enabled);
+      if (enabled.length === 0) {
+        toast.error("Assign at least one location.");
+        return false;
+      }
+      try {
+        setIsSavingLocations(true);
+        const ids = enabled.map((l) => l.id);
+        const body: Record<string, unknown> = {
+          location_id: ids[0],
+        };
+        if (ids.length > 1) {
+          body.assigned_location_ids = ids;
+          body.location_ids = ids;
+        }
+        await orderzillaApi.dashboard.terminals.update(id, { body: body as never });
+        toast.success("Locations updated.");
+        setAssignedLocations(next);
+        const refreshed = (await orderzillaApi.dashboard.terminals.byId(id)) as ApiTerminal;
+        setTerminal(refreshed);
+        return true;
+      } catch {
+        toast.error("Failed to update locations.");
+        return false;
+      } finally {
+        setIsSavingLocations(false);
+      }
+    },
+    [id],
+  );
+
+  const toggleLocation = async (locId: string) => {
+    const next = assignedLocations.map((l) =>
+      l.id === locId ? { ...l, enabled: !l.enabled } : l,
     );
+    if (!next.some((l) => l.enabled)) {
+      toast.error("At least one location must remain assigned.");
+      return;
+    }
+    await saveLocationAssignments(next);
+  };
+
+  const openReassignModal = () => {
+    setReassignSelection(new Set(assignedLocations.filter((l) => l.enabled).map((l) => l.id)));
+    setReassignOpen(true);
+  };
+
+  const toggleReassignCheckbox = (locId: string) => {
+    setReassignSelection((prev) => {
+      const n = new Set(prev);
+      if (n.has(locId)) n.delete(locId);
+      else n.add(locId);
+      return n;
+    });
+  };
+
+  const applyReassignModal = async () => {
+    if (locationCatalog.length === 0) {
+      toast.error("No locations available. Create a location first.");
+      return;
+    }
+    if (reassignSelection.size === 0) {
+      toast.error("Select at least one location.");
+      return;
+    }
+    const next: AssignedLocation[] = locationCatalog.map((c) => ({
+      id: c.id,
+      name: c.name,
+      enabled: reassignSelection.has(c.id),
+    }));
+    const ok = await saveLocationAssignments(next);
+    if (ok) setReassignOpen(false);
   };
 
   const toggleActive = async () => {
@@ -370,63 +506,91 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
                 <div>
                   <div className="flex justify-between text-[14px] mb-1">
                     <span className="text-[#6e7785]">Storage Usage</span>
-                    <span className="font-semibold text-[#2f3743]">{storageUsedPct}% Used</span>
+                    <span className="font-semibold text-[#2f3743]">
+                      {storageUsedPct != null ? `${storageUsedPct}% Used` : EMPTY_VALUE}
+                    </span>
                   </div>
-                  <div className="h-2 rounded-full bg-[#e5e7eb] overflow-hidden">
-                    <div
-                      className="h-full bg-[#d4ff00] rounded-full transition-all"
-                      style={{ width: `${Math.min(storageUsedPct, 100)}%` }}
-                    />
-                  </div>
-                  <p className="mt-1 text-[12px] text-[#6e7785]">
-                    {storageUsedGb} GB of {storageTotalGb} GB
-                  </p>
+                  {storageUsedPct != null ? (
+                    <>
+                      <div className="h-2 rounded-full bg-[#e5e7eb] overflow-hidden">
+                        <div
+                          className="h-full bg-[#d4ff00] rounded-full transition-all"
+                          style={{ width: `${Math.min(storageUsedPct, 100)}%` }}
+                        />
+                      </div>
+                      <p className="mt-1 text-[12px] text-[#6e7785]">
+                        {storageUsedGb != null && storageTotalGb != null
+                          ? `${storageUsedGb} GB of ${storageTotalGb} GB`
+                          : "—"}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-[12px] text-[#6e7785]">Not reported by device.</p>
+                  )}
                 </div>
                 <div>
                   <div className="flex justify-between text-[14px] mb-1">
                     <span className="text-[#6e7785]">Memory Usage</span>
-                    <span className="font-semibold text-[#2f3743]">{memoryUsedPct}% Used</span>
-                  </div>
-                  <div className="h-2 rounded-full bg-[#e5e7eb] overflow-hidden">
-                    <div
-                      className="h-full bg-[#d4ff00] rounded-full transition-all"
-                      style={{ width: `${memoryUsedPct}%` }}
-                    />
-                  </div>
-                  <p className="mt-1 text-[12px] text-[#6e7785]">
-                    {memoryUsedGb} GB of {memoryTotalGb} GB
-                  </p>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="relative h-14 w-14">
-                    <svg className="h-full w-full -rotate-90" viewBox="0 0 36 36">
-                      <circle
-                        cx="18"
-                        cy="18"
-                        r="16"
-                        fill="none"
-                        stroke="#e5e7eb"
-                        strokeWidth="2"
-                      />
-                      <circle
-                        cx="18"
-                        cy="18"
-                        r="16"
-                        fill="none"
-                        stroke="#d4ff00"
-                        strokeWidth="2"
-                        strokeDasharray={`${cpuLoad} 100`}
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                    <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold text-[#2f3743]">
-                      {cpuLoad}%
+                    <span className="font-semibold text-[#2f3743]">
+                      {memoryUsedPct != null ? `${memoryUsedPct}% Used` : EMPTY_VALUE}
                     </span>
                   </div>
-                  <div>
-                    <p className="text-[14px] font-semibold text-[#2f3743]">CPU Load</p>
-                    <p className="text-[12px] text-[#6e7785]">Low Load</p>
-                  </div>
+                  {memoryUsedPct != null ? (
+                    <>
+                      <div className="h-2 rounded-full bg-[#e5e7eb] overflow-hidden">
+                        <div
+                          className="h-full bg-[#d4ff00] rounded-full transition-all"
+                          style={{ width: `${memoryUsedPct}%` }}
+                        />
+                      </div>
+                      <p className="mt-1 text-[12px] text-[#6e7785]">
+                        {memoryUsedGb != null && memoryTotalGb != null
+                          ? `${memoryUsedGb} GB of ${memoryTotalGb} GB`
+                          : "—"}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-[12px] text-[#6e7785]">Not reported by device.</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-4">
+                  {cpuLoad != null ? (
+                    <>
+                      <div className="relative h-14 w-14">
+                        <svg className="h-full w-full -rotate-90" viewBox="0 0 36 36">
+                          <circle
+                            cx="18"
+                            cy="18"
+                            r="16"
+                            fill="none"
+                            stroke="#e5e7eb"
+                            strokeWidth="2"
+                          />
+                          <circle
+                            cx="18"
+                            cy="18"
+                            r="16"
+                            fill="none"
+                            stroke="#d4ff00"
+                            strokeWidth="2"
+                            strokeDasharray={`${cpuLoad} 100`}
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                        <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold text-[#2f3743]">
+                          {cpuLoad}%
+                        </span>
+                      </div>
+                      <div>
+                        <p className="text-[14px] font-semibold text-[#2f3743]">CPU Load</p>
+                        <p className="text-[12px] text-[#6e7785]">
+                          {cpuLoad < 50 ? "Low load" : cpuLoad < 80 ? "Moderate" : "High"}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-[12px] text-[#6e7785]">CPU load not reported by device.</p>
+                  )}
                 </div>
                 <div className="flex items-center gap-3">
                   <Plug size={20} className="text-[#6e7785]" />
@@ -543,42 +707,55 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
 
             <article className="rounded-xl border border-[#e4e6ea] bg-white p-4">
               <h2 className="text-[18px] font-bold text-[#1a212c]">Assigned Locations</h2>
-              <div className="mt-4 space-y-3">
-                {assignedLocations.map((loc) => (
-                  <div
-                    key={loc.id}
-                    className="flex items-center justify-between rounded-lg border border-[#e5e7eb] px-3 py-2"
-                  >
-                    <span className="text-[14px] font-semibold text-[#2f3743]">{loc.name}</span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        className="p-1 text-[#6e7785] hover:text-[#2f3743]"
-                        aria-label="Edit"
-                      >
-                        <Pencil size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={loc.enabled}
-                        onClick={() => toggleLocation(loc.id)}
-                        className={`h-5 w-9 rounded-full transition-colors ${
-                          loc.enabled ? "bg-[#d4ff00]" : "bg-[#e5e7eb]"
-                        }`}
-                      >
-                        <span
-                          className={`block h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                            loc.enabled ? "translate-x-4" : "translate-x-0.5"
+              <p className="mt-1 text-[12px] text-[#6e7785]">
+                Changes save immediately. Multiple locations send <code className="text-[11px]">assigned_location_ids</code>{" "}
+                plus <code className="text-[11px]">location_id</code> (primary).
+              </p>
+              <div className="mt-4 space-y-3 max-h-56 overflow-y-auto pr-1">
+                {assignedLocations.length === 0 ? (
+                  <p className="text-[14px] text-[#7a8291]">No locations loaded. Create locations or use Reassign.</p>
+                ) : (
+                  assignedLocations.map((loc) => (
+                    <div
+                      key={loc.id}
+                      className="flex items-center justify-between rounded-lg border border-[#e5e7eb] px-3 py-2"
+                    >
+                      <span className="text-[14px] font-semibold text-[#2f3743]">{loc.name}</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="p-1 text-[#6e7785] hover:text-[#2f3743]"
+                          aria-label="Reassign locations"
+                          disabled={isSavingLocations}
+                          onClick={openReassignModal}
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={loc.enabled}
+                          disabled={isSavingLocations}
+                          onClick={() => void toggleLocation(loc.id)}
+                          className={`h-5 w-9 rounded-full transition-colors disabled:opacity-50 ${
+                            loc.enabled ? "bg-[#d4ff00]" : "bg-[#e5e7eb]"
                           }`}
-                        />
-                      </button>
+                        >
+                          <span
+                            className={`block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                              loc.enabled ? "translate-x-4" : "translate-x-0.5"
+                            }`}
+                          />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
                 <button
                   type="button"
-                  className="h-10 w-full rounded-lg border border-[#dfe3e8] bg-white px-3 text-[14px] font-medium text-[#6b7280] text-left flex items-center justify-between"
+                  disabled={isSavingLocations}
+                  onClick={openReassignModal}
+                  className="h-10 w-full rounded-lg border border-[#dfe3e8] bg-white px-3 text-[14px] font-medium text-[#3f4653] text-left flex items-center justify-between hover:bg-[#f9fafb] disabled:opacity-50"
                 >
                   Reassign Locations...
                   <span className="text-[#9ca3af]">▼</span>
@@ -588,6 +765,59 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
           </div>
         </div>
       </section>
+
+      {reassignOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+          onClick={() => !isSavingLocations && setReassignOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-[18px] font-bold text-[#1a212c]">Reassign locations</h2>
+            <p className="mt-1 text-[13px] text-[#6e7785]">Choose which locations this terminal serves. At least one is required.</p>
+            <div className="mt-4 max-h-64 space-y-2 overflow-y-auto">
+              {locationCatalog.length === 0 ? (
+                <p className="text-[13px] text-[#92400e]">No locations found. Add locations under Locations first.</p>
+              ) : (
+                locationCatalog.map((loc) => (
+                  <label
+                    key={loc.id}
+                    className="flex cursor-pointer items-center gap-3 rounded-lg border border-[#e5e7eb] px-3 py-2 hover:bg-[#f9fafb]"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={reassignSelection.has(loc.id)}
+                      onChange={() => toggleReassignCheckbox(loc.id)}
+                      className="h-4 w-4 rounded border-[#cbd5e1]"
+                    />
+                    <span className="text-[14px] font-medium text-[#2f3743]">{loc.name}</span>
+                  </label>
+                ))
+              )}
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={isSavingLocations}
+                onClick={() => setReassignOpen(false)}
+                className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSavingLocations || locationCatalog.length === 0}
+                onClick={() => void applyReassignModal()}
+                className="h-10 rounded-lg bg-[#d4ff00] px-4 text-[14px] font-semibold text-[#1d2512] disabled:opacity-50"
+              >
+                {isSavingLocations ? "Saving..." : "Apply"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -16,6 +16,7 @@ import {
 } from "recharts";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api";
+import { proxiedImageSrc } from "@/lib/media-url";
 
 type MetricCard = {
   title: string;
@@ -541,11 +542,7 @@ export default function Overview() {
                       <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-[#e5e7eb] bg-[#f8f9fb]">
                         {product.imageUrl ? (
                           <img
-                            src={
-                              product.imageUrl.startsWith("http")
-                                ? product.imageUrl
-                                : `/api/proxy${product.imageUrl}`
-                            }
+                            src={proxiedImageSrc(product.imageUrl) ?? product.imageUrl}
                             alt={product.name}
                             className="h-full w-full object-cover"
                           />

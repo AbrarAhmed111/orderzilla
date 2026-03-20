@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
 import { orderzillaApi } from "@/lib/api";
+import { dedupePriceRulesForSave, normalizePriceMode } from "@/lib/product-pricing";
 import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
 import { validateField } from "@/lib/validation";
 import type { components } from "@/types/orderzilla-openapi";
@@ -49,6 +50,7 @@ const createPriceDraft = (): PriceDraft => ({
 export default function CreateProductPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const saveLockRef = useRef(false);
 
   const [name, setName] = useState("");
   const [internalName, setInternalName] = useState("");
@@ -137,7 +139,14 @@ export default function CreateProductPage() {
 
   const saveProduct = async () => {
     if (!isFormValid) return;
-    const validPrices = prices.filter((price) => price.price.trim().length > 0);
+    if (saveLockRef.current) return;
+    saveLockRef.current = true;
+
+    const validPrices = dedupePriceRulesForSave(
+      prices
+        .filter((price) => price.price.trim().length > 0)
+        .map((p) => ({ ...p, mode: normalizePriceMode(p.mode) })),
+    );
 
     try {
       setIsSaving(true);
@@ -158,25 +167,25 @@ export default function CreateProductPage() {
             mode: price.mode,
             price: price.price.trim(),
             currency: price.currency.trim() || "CHF",
-            location_id: price.location_id || null,
-            terminal_id: price.terminal_id || null,
-            valid_from: price.valid_from || null,
-            valid_until: price.valid_until || null,
+            location_id: price.location_id?.trim() ? price.location_id.trim() : null,
+            terminal_id: price.terminal_id?.trim() ? price.terminal_id.trim() : null,
+            valid_from: price.valid_from?.trim() ? price.valid_from.trim() : null,
+            valid_until: price.valid_until?.trim() ? price.valid_until.trim() : null,
           })),
         },
       });
 
-      if (created?.id && selectedExtraGroupIds.length > 0) {
-        await Promise.all(
-          selectedExtraGroupIds.map((groupId, index) =>
-            orderzillaApi.dashboard.products.extras.attach(created.id!, {
-              body: {
-                extra_group_id: groupId,
-                sort_order: index,
-              },
-            }),
-          ),
-        );
+      const uniqueExtras = [...new Set(selectedExtraGroupIds)];
+      if (created?.id && uniqueExtras.length > 0) {
+        for (let index = 0; index < uniqueExtras.length; index += 1) {
+          const groupId = uniqueExtras[index];
+          await orderzillaApi.dashboard.products.extras.attach(created.id!, {
+            body: {
+              extra_group_id: groupId,
+              sort_order: index,
+            },
+          });
+        }
       }
 
       if (imageFile && created?.id) {
@@ -192,6 +201,7 @@ export default function CreateProductPage() {
     } catch {
       toast.error("Failed to create product.");
     } finally {
+      saveLockRef.current = false;
       setIsSaving(false);
     }
   };
@@ -377,14 +387,8 @@ export default function CreateProductPage() {
                 <div key={price.id} className="rounded-lg border border-[#e5e7eb] p-2">
                   <div className="grid grid-cols-4 gap-2">
                     <SelectMenu
-                      value={price.mode}
-                      onChange={(value) =>
-                        updatePrice(
-                          price.id,
-                          "mode",
-                          value === "INDOOR" || value === "TAKEAWAY" ? value : "BOTH",
-                        )
-                      }
+                      value={normalizePriceMode(price.mode)}
+                      onChange={(value) => updatePrice(price.id, "mode", normalizePriceMode(value))}
                       options={[
                         { label: "Both", value: "BOTH" },
                         { label: "Indoor", value: "INDOOR" },

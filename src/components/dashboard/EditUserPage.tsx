@@ -4,9 +4,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, User, X } from "lucide-react";
+import { isAxiosError } from "axios";
 import toast from "react-hot-toast";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api";
+import { deleteDashboardUserOrThrow } from "@/lib/api/delete-dashboard-user";
+import { proxiedImageSrc } from "@/lib/media-url";
 
 const EMPTY_VALUE = "—";
 
@@ -222,12 +225,33 @@ export default function EditUserPage({ id }: EditUserPageProps) {
     if (isOwner) return;
     try {
       setIsDeleting(true);
-      await orderzillaApi.dashboard.users.remove(id);
+      await deleteDashboardUserOrThrow(id);
       toast.success("User deleted.");
       router.push("/dashboard/users");
     } catch (err: unknown) {
-      const msg = err && typeof err === "object" && "error" in err ? String((err as { error: string }).error) : "";
-      toast.error(msg === "cannot_modify_owner" ? "Owner accounts cannot be deleted." : "Failed to delete user.");
+      let msg = "";
+      if (err instanceof Error) {
+        const e = err as Error & { isDeleteUserError?: boolean };
+        if (e.isDeleteUserError) msg = e.message.trim();
+      }
+      if (!msg && isAxiosError(err) && err.response?.data != null) {
+        const d = err.response.data;
+        if (typeof d === "object" && d !== null) {
+          msg =
+            String((d as { message?: string }).message ?? (d as { error?: string }).error ?? "").trim();
+        } else if (typeof d === "string") {
+          msg = d;
+        }
+      }
+      if (!msg && err && typeof err === "object" && "error" in err) {
+        msg = String((err as { error: string }).error);
+      }
+      const lower = msg.toLowerCase();
+      toast.error(
+        lower.includes("cannot_modify_owner") || lower.includes("owner")
+          ? "Owner accounts cannot be deleted."
+          : msg || "Failed to delete user.",
+      );
     } finally {
       setIsDeleting(false);
       setShowDeleteConfirm(false);
@@ -407,7 +431,7 @@ export default function EditUserPage({ id }: EditUserPageProps) {
                     <div className="h-20 w-20 shrink-0 rounded-full overflow-hidden bg-[#e5e7eb] flex items-center justify-center">
                       {avatarUrl.trim() && !avatarLoadError ? (
                         <img
-                          src={avatarUrl.trim()}
+                          src={proxiedImageSrc(avatarUrl.trim()) ?? avatarUrl.trim()}
                           alt=""
                           className="h-full w-full object-cover"
                           onError={() => setAvatarLoadError(true)}

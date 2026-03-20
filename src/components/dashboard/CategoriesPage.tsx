@@ -9,6 +9,7 @@ import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import SelectMenu from "@/components/dashboard/ui/SelectMenu";
 import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api";
+import { proxiedImageSrc } from "@/lib/media-url";
 import type { components } from "@/types/orderzilla-openapi";
 
 const EMPTY_VALUE = "—";
@@ -370,11 +371,7 @@ export default function CategoriesPage() {
                 <div className="h-12 w-12 overflow-hidden rounded-lg border border-[#e5e7eb] bg-[#f8f9fb]">
                   {category.imageUrl ? (
                     <img
-                      src={
-                        category.imageUrl.startsWith("http")
-                          ? category.imageUrl
-                          : `/api/proxy${category.imageUrl}`
-                      }
+                      src={proxiedImageSrc(category.imageUrl) ?? category.imageUrl}
                       alt={category.name}
                       className="h-full w-full object-cover"
                     />

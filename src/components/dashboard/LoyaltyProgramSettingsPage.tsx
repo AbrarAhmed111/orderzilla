@@ -3,20 +3,12 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { isAxiosError } from "axios";
-import { ArrowLeft, MoreHorizontal } from "lucide-react";
+import { ArrowLeft, Trash2 } from "lucide-react";
 import toast from "react-hot-toast";
 import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
 import { orderzillaApi } from "@/lib/api";
 import type { components } from "@/types/orderzilla-openapi";
-
-const EMPTY_VALUE = "—";
-
-function toDisplayValue(value: unknown, fallback: string): string {
-  if (value === undefined || value === null) return fallback;
-  if (typeof value === "string" || typeof value === "number") return String(value);
-  return fallback;
-}
 
 type LoyaltyProgram = components["schemas"]["LoyaltyProgram"];
 type LoyaltyCustomer = components["schemas"]["LoyaltyCustomer"];
@@ -29,14 +21,45 @@ type TierRow = {
   badgeColor: string;
 };
 
-const MOCK_CHART_DATA = [
-  { m: "1", v: 40 },
-  { m: "2", v: 55 },
-  { m: "3", v: 45 },
-  { m: "4", v: 70 },
-  { m: "5", v: 65 },
-  { m: "6", v: 80 },
-];
+function createEmptyTier(): TierRow {
+  return {
+    id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `tier-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    name: "",
+    pointsThreshold: 0,
+    discountPercent: null,
+    badgeColor: "#d4ff00",
+  };
+}
+
+function normalizeHexColor(hex: string): string {
+  const t = hex.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(t)) return t;
+  if (/^[0-9a-fA-F]{6}$/.test(t)) return `#${t}`;
+  return "#d4ff00";
+}
+
+/** Mini charts only when API returns series (e.g. summary_chart / program_metrics_trend). */
+function chartDataFromProgram(program: unknown): { m: string; v: number }[] | undefined {
+  if (!program || typeof program !== "object") return undefined;
+  const p = program as {
+    summary_chart?: { m?: string; v?: number }[];
+    program_metrics_trend?: { period?: string; value?: number }[];
+  };
+  const a = p.summary_chart;
+  if (Array.isArray(a) && a.length > 0) {
+    return a
+      .map((pt, i) => ({ m: String(pt.m ?? i + 1), v: typeof pt.v === "number" ? pt.v : 0 }))
+      .filter((pt) => Number.isFinite(pt.v));
+  }
+  const t = p.program_metrics_trend;
+  if (Array.isArray(t) && t.length > 0) {
+    return t.map((pt, i) => ({
+      m: String(pt.period ?? i + 1),
+      v: typeof pt.value === "number" ? pt.value : 0,
+    }));
+  }
+  return undefined;
+}
 
 function StatCard({ label, value, chartData }: { label: string; value: string; chartData?: { m: string; v: number }[] }) {
   return (
@@ -82,6 +105,7 @@ export default function LoyaltyProgramSettingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
+  const [programChartData, setProgramChartData] = useState<{ m: string; v: number }[] | undefined>(undefined);
 
   const fetchProgram = useCallback(async () => {
     try {
@@ -94,12 +118,15 @@ export default function LoyaltyProgramSettingsPage() {
         if (!(isAxiosError(e) && e.response?.status === 404)) throw e;
       }
       if (program) {
+        setProgramChartData(chartDataFromProgram(program));
         setIsActive(program.is_active ?? true);
         setPointsPerChf(program.points_per_chf ?? 1);
         setChfPerPoint(program.chf_per_point ?? 0.1);
         setMinRedeemPoints(program.min_redeem_points ?? 100);
         setMaxDiscountPercent(program.max_redeem_percent ?? 25);
         setExpiryDays(program.expiry_days ?? 365);
+      } else {
+        setProgramChartData(undefined);
       }
       const tiersData = (program as { tiers?: Array<Record<string, unknown>> })?.tiers;
       if (tiersData && Array.isArray(tiersData) && tiersData.length > 0) {
@@ -125,10 +152,27 @@ export default function LoyaltyProgramSettingsPage() {
         query: { page: 1, limit: 500 },
       });
       const customers = (customersData?.customers ?? []) as LoyaltyCustomer[];
-      const totalMembers = customers.length;
-      const totalPointsIssued = customers.reduce((s, c) => s + (c.total_points_earned ?? 0), 0);
-      const totalPointsRedeemed = customers.reduce((s, c) => s + (c.total_points_redeemed ?? 0), 0);
-      const activeMembersLast30 = (customersData as { active_last_30_days?: number })?.active_last_30_days ?? customers.filter((c) => c.is_active).length;
+      const prog = program as {
+        total_members?: number;
+        total_points_issued?: number;
+        total_points_redeemed?: number;
+        active_last_30_days?: number;
+      } | undefined;
+      const totalMembers =
+        typeof prog?.total_members === "number" ? prog.total_members : customers.length;
+      const totalPointsIssued =
+        typeof prog?.total_points_issued === "number"
+          ? prog.total_points_issued
+          : customers.reduce((s, c) => s + (c.total_points_earned ?? 0), 0);
+      const totalPointsRedeemed =
+        typeof prog?.total_points_redeemed === "number"
+          ? prog.total_points_redeemed
+          : customers.reduce((s, c) => s + (c.total_points_redeemed ?? 0), 0);
+      const activeMembersLast30 =
+        (customersData as { active_last_30_days?: number })?.active_last_30_days ??
+        (typeof prog?.active_last_30_days === "number"
+          ? prog.active_last_30_days
+          : customers.filter((c) => c.is_active).length);
       setSummary({
         totalMembers,
         totalPointsIssued,
@@ -137,6 +181,7 @@ export default function LoyaltyProgramSettingsPage() {
       });
     } catch {
       setError("Failed to load loyalty program.");
+      setProgramChartData(undefined);
       setTiers([]);
       setSummary({
         totalMembers: 0,
@@ -153,7 +198,48 @@ export default function LoyaltyProgramSettingsPage() {
     fetchProgram();
   }, [fetchProgram]);
 
+  const updateTier = useCallback((tierId: string, patch: Partial<TierRow>) => {
+    setTiers((prev) =>
+      prev.map((t) => (t.id === tierId ? { ...t, ...patch } : t)),
+    );
+  }, []);
+
+  const removeTier = useCallback((tierId: string) => {
+    setTiers((prev) => prev.filter((t) => t.id !== tierId));
+  }, []);
+
+  const addTier = useCallback(() => {
+    setTiers((prev) => [...prev, createEmptyTier()]);
+  }, []);
+
   const onSave = async () => {
+    const trimmedTiers = tiers.map((t) => ({
+      ...t,
+      name: t.name.trim(),
+      pointsThreshold: Math.max(0, Math.floor(Number(t.pointsThreshold) || 0)),
+      badgeColor: normalizeHexColor(t.badgeColor),
+    }));
+
+    const invalid = trimmedTiers.find((t) => !t.name);
+    if (trimmedTiers.length > 0 && invalid) {
+      toast.error("Each tier needs a name.");
+      return;
+    }
+
+    const discountInvalid = trimmedTiers.find(
+      (t) =>
+        t.discountPercent != null &&
+        (Number.isNaN(t.discountPercent) || t.discountPercent < 0 || t.discountPercent > 100),
+    );
+    if (discountInvalid) {
+      toast.error("Discount % must be between 0 and 100, or left empty.");
+      return;
+    }
+
+    const tiersPayload = [...trimmedTiers].sort(
+      (a, b) => a.pointsThreshold - b.pointsThreshold,
+    );
+
     setIsSaving(true);
     try {
       await orderzillaApi.dashboard.loyalty.program.update({
@@ -164,7 +250,7 @@ export default function LoyaltyProgramSettingsPage() {
           min_redeem_points: minRedeemPoints,
           max_redeem_percent: maxDiscountPercent,
           expiry_days: expiryDays,
-          tiers: tiers.map((t) => ({
+          tiers: tiersPayload.map((t) => ({
             name: t.name,
             points_threshold: t.pointsThreshold,
             discount_percent: t.discountPercent ?? undefined,
@@ -372,33 +458,87 @@ export default function LoyaltyProgramSettingsPage() {
                   <tbody>
                     {tiers.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-4 py-10 text-center text-[13px] text-[#717c8e]">
-                          No tiers configured.
+                        <td colSpan={5} className="px-4 py-8 text-center text-[13px] text-[#717c8e]">
+                          No tiers yet. Use &quot;+ Add Tier&quot; to define levels (e.g. Bronze, Silver, Gold). Save
+                          settings to sync with the server.
                         </td>
                       </tr>
                     ) : (
                       tiers.map((tier) => (
                         <tr key={tier.id} className="border-b border-[#edf0f4] text-[14px]">
-                          <td className="px-3 py-3 font-semibold text-[#2f3743]">{toDisplayValue(tier.name, EMPTY_VALUE)}</td>
-                          <td className="px-2 py-3 text-[#2f3743]">
-                            {(tier.pointsThreshold ?? 0).toLocaleString()} Points
-                          </td>
-                          <td className="px-2 py-3 text-[#2f3743]">
-                            {tier.discountPercent != null ? `${tier.discountPercent}%` : EMPTY_VALUE}
-                          </td>
-                          <td className="px-2 py-3">
-                            <span
-                              className="inline-block h-5 w-5 rounded-full border border-[#e5e7eb]"
-                              style={{ backgroundColor: tier.badgeColor }}
+                          <td className="px-3 py-2 align-middle">
+                            <input
+                              type="text"
+                              value={tier.name}
+                              onChange={(e) => updateTier(tier.id, { name: e.target.value })}
+                              className="h-9 w-full min-w-[120px] max-w-[200px] rounded-lg border border-[#dfe3e8] px-2 text-[13px] font-semibold text-[#2f3743]"
+                              placeholder="e.g. Gold"
+                              aria-label="Tier name"
                             />
                           </td>
-                          <td className="px-3 py-3 text-right">
+                          <td className="px-2 py-2 align-middle">
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={tier.pointsThreshold}
+                                onChange={(e) =>
+                                  updateTier(tier.id, {
+                                    pointsThreshold: Math.max(0, Number(e.target.value) || 0),
+                                  })
+                                }
+                                className="h-9 w-full min-w-[100px] max-w-[140px] rounded-lg border border-[#dfe3e8] px-2 text-[13px] text-[#2f3743]"
+                                aria-label="Points threshold"
+                              />
+                              <span className="shrink-0 text-[12px] text-[#6e7785]">pts</span>
+                            </div>
+                          </td>
+                          <td className="px-2 py-2 align-middle">
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={tier.discountPercent ?? ""}
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  updateTier(tier.id, {
+                                    discountPercent: raw === "" ? null : Number(raw),
+                                  });
+                                }}
+                                className="h-9 w-full min-w-[72px] max-w-[100px] rounded-lg border border-[#dfe3e8] px-2 text-[13px] text-[#2f3743]"
+                                placeholder="—"
+                                aria-label="Optional discount percent"
+                              />
+                              <span className="shrink-0 text-[12px] text-[#6e7785]">%</span>
+                            </div>
+                          </td>
+                          <td className="px-2 py-2 align-middle">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="color"
+                                value={normalizeHexColor(tier.badgeColor)}
+                                onChange={(e) => updateTier(tier.id, { badgeColor: e.target.value })}
+                                className="h-9 w-11 cursor-pointer rounded border border-[#dfe3e8] bg-white p-0.5"
+                                title="Badge color"
+                                aria-label="Badge color"
+                              />
+                              <span
+                                className="inline-block h-5 w-5 shrink-0 rounded-full border border-[#e5e7eb]"
+                                style={{ backgroundColor: normalizeHexColor(tier.badgeColor) }}
+                              />
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-right align-middle">
                             <button
                               type="button"
-                              className="p-1 text-[#6e7785] hover:text-[#2f3743] rounded"
-                              aria-label="Edit tier"
+                              onClick={() => removeTier(tier.id)}
+                              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#fee2e2] text-[#b91c1c] hover:bg-[#fef2f2]"
+                              aria-label="Remove tier"
                             >
-                              <MoreHorizontal size={16} />
+                              <Trash2 size={16} />
                             </button>
                           </td>
                         </tr>
@@ -409,7 +549,8 @@ export default function LoyaltyProgramSettingsPage() {
               </div>
               <button
                 type="button"
-                className="mt-3 h-9 rounded-lg border border-[#dfe3e8] bg-white px-3 text-[13px] font-semibold text-[#414855]"
+                onClick={addTier}
+                className="mt-3 h-9 rounded-lg border border-[#dfe3e8] bg-white px-3 text-[13px] font-semibold text-[#414855] hover:bg-[#f9fafb]"
               >
                 + Add Tier
               </button>
@@ -475,22 +616,22 @@ export default function LoyaltyProgramSettingsPage() {
                 <StatCard
                   label="Total Members"
                   value={summary.totalMembers.toLocaleString()}
-                  chartData={MOCK_CHART_DATA}
+                  chartData={programChartData}
                 />
                 <StatCard
                   label="Total Points Issued"
                   value={summary.totalPointsIssued.toLocaleString()}
-                  chartData={MOCK_CHART_DATA}
+                  chartData={programChartData}
                 />
                 <StatCard
                   label="Total Points Redeemed"
                   value={summary.totalPointsRedeemed.toLocaleString()}
-                  chartData={MOCK_CHART_DATA}
+                  chartData={programChartData}
                 />
                 <StatCard
                   label="Active Members (Last 30 Days)"
                   value={summary.activeMembersLast30.toLocaleString()}
-                  chartData={MOCK_CHART_DATA}
+                  chartData={programChartData}
                 />
               </div>
             </article>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { isAxiosError } from "axios";
 import toast from "react-hot-toast";
 import RowActionMenu from "@/components/dashboard/ui/RowActionMenu";
 import { TableSkeleton } from "@/components/dashboard/ui/Skeleton";
@@ -12,6 +13,8 @@ import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
 import { validateField } from "@/lib/validation";
 import TablePagination from "@/components/dashboard/ui/TablePagination";
 import { orderzillaApi } from "@/lib/api/orderzilla-api";
+import { deleteDashboardUser } from "@/lib/api/delete-dashboard-user";
+import { proxiedImageSrc } from "@/lib/media-url";
 import type { components } from "@/types/orderzilla-openapi";
 
 const EMPTY_VALUE = "—";
@@ -24,6 +27,28 @@ function toDisplayValue(value: unknown, fallback: string): string {
 
 type ApiUser = components["schemas"]["User"];
 type UserApiRole = "OWNER" | "ADMIN" | "MANAGER" | "VIEWER";
+
+/** Never fabricate an id — DELETE/edit must use the real API id (may be `id`, `user_id`, `uuid`, or `_id`). */
+function resolveDashboardUserId(user: ApiUser & Record<string, unknown>): string {
+  const candidates = [
+    user.id,
+    user.user_id,
+    (user as { uuid?: unknown }).uuid,
+    (user as { _id?: unknown })._id,
+  ];
+  for (const c of candidates) {
+    if (c === undefined || c === null) continue;
+    const s = String(c).trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+function normalizeUserRole(role: unknown): UserApiRole {
+  const u = String(role ?? "").toUpperCase();
+  if (u === "OWNER" || u === "ADMIN" || u === "MANAGER" || u === "VIEWER") return u;
+  return "VIEWER";
+}
 
 type UserRow = {
   id: string;
@@ -104,7 +129,7 @@ function UserAvatar({ avatarUrl, name }: { avatarUrl: string | null; name: strin
   const showImage = avatarUrl && avatarUrl.trim() !== "" && !imgError;
   return showImage ? (
     <img
-      src={avatarUrl}
+      src={proxiedImageSrc(avatarUrl) ?? avatarUrl}
       alt={name}
       className="h-9 w-9 rounded-full object-cover bg-[#f0f1f3]"
       onError={() => setImgError(true)}
@@ -261,11 +286,12 @@ export default function UsersPage() {
           const u = user as ApiUser & { last_login_at?: string; avatar_url?: string | null };
           const loginAt = u.last_login_at ?? user.created_at;
           const avatarUrl = typeof u.avatar_url === "string" && u.avatar_url.trim() ? u.avatar_url : null;
+          const id = resolveDashboardUserId(u as ApiUser & Record<string, unknown>);
           return {
-            id: toDisplayValue(user.id, "") || crypto.randomUUID(),
+            id,
             name: toDisplayValue(user.name, EMPTY_VALUE),
             email: toDisplayValue(user.email, EMPTY_VALUE),
-            role: (user.role as UserApiRole) ?? "VIEWER",
+            role: normalizeUserRole(user.role),
             lastLogin: loginAt ? new Date(loginAt).toLocaleString() : EMPTY_VALUE,
             active: user.is_active ?? true,
             avatarUrl,
@@ -274,7 +300,13 @@ export default function UsersPage() {
       );
       setTotalItems(data.pagination?.total_items ?? users.length);
       setTotalPages(data.pagination?.total_pages ?? 1);
-      setSelectedIds((prev) => prev.filter((id) => users.some((user) => user.id === id)));
+      setSelectedIds((prev) =>
+        prev.filter((selId) =>
+          users.some(
+            (u) => resolveDashboardUserId(u as ApiUser & Record<string, unknown>) === selId,
+          ),
+        ),
+      );
     } catch {
       setError("Failed to load users.");
       setRows([]);
@@ -289,7 +321,10 @@ export default function UsersPage() {
     fetchUsers();
   }, [fetchUsers]);
 
-  const selectableRows = useMemo(() => rows.filter((r) => r.role !== "OWNER"), [rows]);
+  const selectableRows = useMemo(
+    () => rows.filter((r) => r.role !== "OWNER" && r.id.length > 0),
+    [rows],
+  );
   const allCurrentPageSelected = useMemo(
     () =>
       selectableRows.length > 0 &&
@@ -329,19 +364,75 @@ export default function UsersPage() {
   };
 
   const deleteUsers = async (ids: string[]) => {
+    const cleaned = ids.map((id) => id.trim()).filter(Boolean);
     const ownerIds = new Set(rows.filter((r) => r.role === "OWNER").map((r) => r.id));
-    const modifiableIds = ids.filter((id) => !ownerIds.has(id));
-    if (!modifiableIds.length) return;
+    const modifiableIds = cleaned.filter((id) => !ownerIds.has(id));
+    if (!modifiableIds.length) {
+      toast.error(
+        cleaned.length === 0
+          ? "No valid user id to delete."
+          : cleaned.every((id) => ownerIds.has(id))
+            ? "Owner accounts cannot be deleted."
+            : "No users could be deleted.",
+      );
+      setIsDeleteModalOpen(false);
+      setDeleteIds([]);
+      return;
+    }
     try {
       setIsDeleteSubmitting(true);
-      await Promise.all(modifiableIds.map((id) => orderzillaApi.dashboard.users.remove(id)));
+      const results = await Promise.all(modifiableIds.map((uid) => deleteDashboardUser(uid)));
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length > 0) {
+        const r = failed[0];
+        const statusHint =
+          r.status === 404
+            ? " (404 — wrong id or upstream DELETE missing)"
+            : r.status === 405 || r.status === 501
+              ? " (upstream may not support DELETE — backend)"
+              : r.status
+                ? ` (${r.status})`
+                : "";
+        toast.error(
+          r.message && r.message !== "undefined"
+            ? `${r.message}${statusHint}`
+            : `Failed to delete user(s).${statusHint}`,
+        );
+        return;
+      }
       toast.success("Users deleted.");
       setSelectedIds([]);
       setDeleteIds([]);
       setIsDeleteModalOpen(false);
       await fetchUsers();
-    } catch {
-      toast.error("Failed to delete users.");
+    } catch (err) {
+      const status = isAxiosError(err) ? err.response?.status : undefined;
+      const raw = isAxiosError(err) ? err.response?.data : undefined;
+      let msg = "";
+      if (raw && typeof raw === "object") {
+        const o = raw as { message?: string; error?: string; detail?: unknown };
+        msg = String(o.message ?? o.error ?? "").trim();
+        if (!msg && Array.isArray(o.detail)) {
+          msg = o.detail.map((d) => (typeof d === "string" ? d : JSON.stringify(d))).join("; ");
+        }
+      } else if (typeof raw === "string") {
+        msg = raw.trim();
+      }
+      const statusHint =
+        status === 404
+          ? " (404 — user id may be wrong or DELETE route missing)"
+          : status === 405 || status === 501
+            ? " (API may not implement DELETE for users — backend)"
+            : status
+              ? ` (${status})`
+              : "";
+      toast.error(
+        msg && msg !== "undefined"
+          ? `${msg}${statusHint}`
+          : err && typeof err === "object" && "error" in err
+            ? String((err as { error: string }).error)
+            : `Failed to delete users.${statusHint}`,
+      );
     } finally {
       setIsDeleteSubmitting(false);
     }
@@ -649,7 +740,7 @@ export default function UsersPage() {
               ) : (
                 rows.map((user, index) => (
                 <tr
-                  key={user.id}
+                  key={user.id || `row-${user.email}-${index}`}
                   className={`border-b last:border-b-0 border-[#edf0f4] text-[13px] ${
                     index === 0 || index === 1 ? "bg-[#f8f9fb]" : "bg-white"
                   }`}
@@ -657,11 +748,11 @@ export default function UsersPage() {
                   <td className="px-3 py-3">
                     <input
                       type="checkbox"
-                      checked={selectedIds.includes(user.id)}
-                      disabled={user.role === "OWNER"}
+                      checked={user.id ? selectedIds.includes(user.id) : false}
+                      disabled={user.role === "OWNER" || !user.id}
                       onChange={(e) =>
                         setSelectedIds((prev) =>
-                          e.target.checked
+                          e.target.checked && user.id
                             ? [...prev, user.id]
                             : prev.filter((id) => id !== user.id),
                         )
@@ -673,12 +764,18 @@ export default function UsersPage() {
                     <UserAvatar avatarUrl={user.avatarUrl} name={user.name} />
                   </td>
                   <td className="px-2 py-3 font-semibold text-[#222a35]">
-                    <Link
-                      href={`/dashboard/users/${user.id}/edit-user`}
-                      className="hover:underline"
-                    >
-                      {user.name}
-                    </Link>
+                    {user.id ? (
+                      <Link
+                        href={`/dashboard/users/${user.id}/edit-user`}
+                        className="hover:underline"
+                      >
+                        {user.name}
+                      </Link>
+                    ) : (
+                      <span className="text-[#b45309]" title="API did not return a user id">
+                        {user.name}
+                      </span>
+                    )}
                   </td>
                   <td className="px-2 py-3 text-[#3e4653]">{user.email}</td>
                   <td className="px-2 py-3">
@@ -690,13 +787,27 @@ export default function UsersPage() {
                   <td className="px-2 py-3">
                     <Toggle
                       on={user.active}
-                      onToggle={user.role === "OWNER" ? undefined : (next) => updateUsers([user.id], { is_active: next })}
+                      onToggle={
+                        user.role === "OWNER" || !user.id
+                          ? undefined
+                          : (next) => updateUsers([user.id], { is_active: next })
+                      }
                     />
                   </td>
                   <td className="px-3 py-3 text-right">
                     <RowActionMenu
                       actions={
-                        user.role === "OWNER"
+                        !user.id
+                          ? [
+                              {
+                                label: "No user id (API)",
+                                onClick: () =>
+                                  toast.error(
+                                    "This row has no user id from the API, so delete and edit are unavailable.",
+                                  ),
+                              },
+                            ]
+                          : user.role === "OWNER"
                           ? [
                               {
                                 label: "Edit user",

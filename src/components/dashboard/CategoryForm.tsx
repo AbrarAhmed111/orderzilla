@@ -6,6 +6,7 @@ import { ChevronUp, ChevronDown, Trash2, UploadCloud, X } from "lucide-react";
 import { ValidatedInput } from "@/components/dashboard/ui/ValidatedInput";
 import { validateField } from "@/lib/validation";
 import { orderzillaApi } from "@/lib/api";
+import { displayImageSrc } from "@/lib/media-url";
 import type { components } from "@/types/orderzilla-openapi";
 
 const EMPTY_VALUE = "—";
@@ -331,7 +332,7 @@ export default function CategoryForm({
                   <div className="h-16 w-16 overflow-hidden rounded-lg border border-[#e4e6ea] bg-[#f6f8fa]">
                     {(imagePreviewUrl || imageUrl) ? (
                       <img
-                        src={imagePreviewUrl || imageUrl}
+                        src={displayImageSrc(imagePreviewUrl, imageUrl) ?? ""}
                         alt="Category"
                         className="h-full w-full object-cover"
                       />

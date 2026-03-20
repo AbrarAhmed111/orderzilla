@@ -42,73 +42,6 @@ type TerminalLog = {
   };
 };
 
-const MOCK_LOGS: TerminalLog[] = [
-  {
-    id: "1",
-    timestamp: "2023-10-26T12:45:30",
-    level: "Info",
-    eventType: "System Startup",
-    message: "Terminal initialized successfully. Software version v2.4.1 loaded.",
-    source: "System",
-    detailedMessage: "Terminal initialized successfully. Software version v2.4.1 loaded.",
-    deviceMetadata: { os: "Android 12", app: "v2.4.1", network: "Wi-Fi (Strong)" },
-  },
-  {
-    id: "2",
-    timestamp: "2023-10-26T12:48:15",
-    level: "Success",
-    eventType: "Menu Reload",
-    message: "Menu data reloaded from server.",
-    source: "User Action",
-    detailedMessage: "Menu data reloaded from server.",
-    deviceMetadata: { os: "Android 12", app: "v2.4.1", network: "Wi-Fi (Strong)" },
-  },
-  {
-    id: "3",
-    timestamp: "2023-10-26T12:52:10",
-    level: "Warning",
-    eventType: "Network Stability",
-    message: "Intermittent connectivity detected.",
-    source: "Network",
-    detailedMessage: "Intermittent connectivity detected.",
-    deviceMetadata: { os: "Android 12", app: "v2.4.1", network: "Wi-Fi (Weak)" },
-  },
-  {
-    id: "4",
-    timestamp: "2023-10-26T13:05:45",
-    level: "Error",
-    eventType: "Payment Failure",
-    message: "Transaction declined by payment gateway. Error code: 1024.",
-    source: "Payment",
-    detailedMessage:
-      "Transaction declined by payment gateway. Error code: 1824. Request ID: req_123abc.",
-    responseJson: "{ 'status': 'failed', 'error': 'insufficient_funds' }",
-    stackTrace:
-      "at com.orderzilla.payment.Gateway.process (Gateway.java:150)\n...",
-    deviceMetadata: { os: "Android 12", app: "v2.4.1", network: "Wi-Fi (Strong)" },
-  },
-  {
-    id: "5",
-    timestamp: "2023-10-26T13:10:20",
-    level: "Critical",
-    eventType: "Hardware Error",
-    message: "Printer paper jam detected. Requires manual intervention.",
-    source: "Hardware",
-    detailedMessage: "Printer paper jam detected. Requires manual intervention.",
-    deviceMetadata: { os: "Android 12", app: "v2.4.1", network: "Wi-Fi (Strong)" },
-  },
-  {
-    id: "6",
-    timestamp: "2023-10-26T13:15:00",
-    level: "Info",
-    eventType: "Idle State",
-    message: "Terminal entered idle mode after 120 seconds.",
-    source: "System",
-    detailedMessage: "Terminal entered idle mode after 120 seconds.",
-    deviceMetadata: { os: "Android 12", app: "v2.4.1", network: "Wi-Fi (Strong)" },
-  },
-];
-
 const DATE_RANGES = [
   { value: "24h", label: "Last 24 Hours" },
   { value: "7d", label: "Last 7 Days" },
@@ -144,6 +77,30 @@ function formatTimestamp(iso: string) {
   });
 }
 
+function normalizeLogLevel(raw: unknown): LogLevel {
+  const s = String(raw ?? "info").toLowerCase();
+  if (s === "success") return "Success";
+  if (s === "warning") return "Warning";
+  if (s === "error") return "Error";
+  if (s === "critical") return "Critical";
+  return "Info";
+}
+
+function mapApiLogToTerminalLog(entry: Record<string, unknown>): TerminalLog {
+  return {
+    id: String(entry.id ?? crypto.randomUUID()),
+    timestamp: String(entry.timestamp ?? ""),
+    level: normalizeLogLevel(entry.level),
+    eventType: String(entry.event_type ?? ""),
+    message: String(entry.message ?? ""),
+    source: String(entry.source ?? ""),
+    detailedMessage: entry.detailed_message as string | undefined,
+    responseJson: entry.response_json as string | undefined,
+    stackTrace: entry.stack_trace as string | undefined,
+    deviceMetadata: entry.device_metadata as TerminalLog["deviceMetadata"],
+  };
+}
+
 export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPageProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -155,17 +112,17 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
   const level = searchParams.get("level") ?? "all";
   const dateRange = searchParams.get("date") ?? "24h";
 
-  const [terminalName, setTerminalName] = useState(`Terminal #${id.slice(-1)}`);
-  const [terminalCode, setTerminalCode] = useState(`T${id.slice(-1)}-Kiosk`);
-  const [locationName, setLocationName] = useState("Downtown Branch");
+  const [terminalName, setTerminalName] = useState("");
+  const [terminalCode, setTerminalCode] = useState("");
+  const [locationName, setLocationName] = useState("");
   const [logs, setLogs] = useState<TerminalLog[]>([]);
   const [selectedLog, setSelectedLog] = useState<TerminalLog | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [useMockLogs, setUseMockLogs] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [searchInput, setSearchInput] = useState(q);
   const [showSystemLogs, setShowSystemLogs] = useState(true);
   const [showUserActions, setShowUserActions] = useState(true);
-  const [totalLogs, setTotalLogs] = useState(985);
+  const [totalLogs, setTotalLogs] = useState(0);
   const [totalPagesLogs, setTotalPagesLogs] = useState(1);
   const [isExporting, setIsExporting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
@@ -193,38 +150,6 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
     return () => window.clearTimeout(timer);
   }, [searchInput, syncQuery]);
 
-  const expandedLogs = useMemo(() => {
-    if (!useMockLogs || logs.length === 0) return logs;
-    const padded: TerminalLog[] = [];
-    for (let i = 0; i < totalLogs; i++) {
-      const src = logs[i % logs.length];
-      padded.push({ ...src, id: `mock-${i}` });
-    }
-    return padded;
-  }, [logs, useMockLogs, totalLogs]);
-
-  useEffect(() => {
-    if (useMockLogs && selectedLog && expandedLogs.length > 0 && !String(selectedLog.id).startsWith("mock-")) {
-      const match = expandedLogs.find(
-        (l) => l.eventType === selectedLog?.eventType && l.timestamp === selectedLog?.timestamp,
-      );
-      if (match) setSelectedLog(match);
-    }
-  }, [useMockLogs, expandedLogs, selectedLog]);
-
-  const mapApiLogToTerminalLog = (entry: Record<string, unknown>): TerminalLog => ({
-    id: String(entry.id ?? crypto.randomUUID()),
-    timestamp: String(entry.timestamp ?? ""),
-    level: (entry.level ?? "Info") as LogLevel,
-    eventType: String(entry.event_type ?? ""),
-    message: String(entry.message ?? ""),
-    source: String(entry.source ?? ""),
-    detailedMessage: entry.detailed_message as string | undefined,
-    responseJson: entry.response_json as string | undefined,
-    stackTrace: entry.stack_trace as string | undefined,
-    deviceMetadata: entry.device_metadata as TerminalLog["deviceMetadata"],
-  });
-
   const dateFrom = useMemo(() => {
     const now = Date.now();
     const ms =
@@ -240,10 +165,22 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
     return new Date(now - ms).toISOString().slice(0, 10);
   }, [dateRange]);
 
+  function applyLogsResponse(logsRes: unknown) {
+    const apiLogs = (logsRes as { logs?: unknown[] })?.logs;
+    const list = Array.isArray(apiLogs) ? apiLogs : [];
+    const mapped = list.map((e) => mapApiLogToTerminalLog(e as Record<string, unknown>));
+    setLogs(mapped);
+    setSelectedLog(mapped[0] ?? null);
+    const pagination = (logsRes as { pagination?: { total_items?: number; total_pages?: number } })?.pagination;
+    setTotalLogs(pagination?.total_items ?? mapped.length);
+    setTotalPagesLogs(Math.max(1, pagination?.total_pages ?? 1));
+  }
+
   useEffect(() => {
     const run = async () => {
       try {
         setIsLoading(true);
+        setLoadError("");
         const [terminalRes, logsRes] = await Promise.all([
           orderzillaApi.dashboard.terminals.byId(id),
           orderzillaApi.dashboard.terminals.logs.list(id, {
@@ -256,43 +193,27 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
           }),
         ]);
         const terminal = terminalRes as ApiTerminal;
-        setTerminalName(terminal?.name ?? `Terminal #${id.slice(-1)}`);
-        setLocationName(terminal?.location_name ?? "Downtown Branch");
-        setTerminalCode(terminal?.terminal_code ?? `T${id.slice(-1)}-Kiosk`);
-
-        const apiLogs = (logsRes as { logs?: unknown[] })?.logs;
-        if (apiLogs && Array.isArray(apiLogs)) {
-          setUseMockLogs(false);
-          const mapped = apiLogs.map((e) => mapApiLogToTerminalLog(e as Record<string, unknown>));
-          setLogs(mapped);
-          setSelectedLog(mapped[0] ?? null);
-          const pagination = (logsRes as { pagination?: { total_items?: number; total_pages?: number } })?.pagination;
-          setTotalLogs(pagination?.total_items ?? mapped.length);
-          setTotalPagesLogs(pagination?.total_pages ?? 1);
-        } else {
-          setUseMockLogs(true);
-          setLogs(MOCK_LOGS);
-          setSelectedLog(MOCK_LOGS[3] ?? MOCK_LOGS[0] ?? null);
-          setTotalLogs(985);
-          setTotalPagesLogs(50);
-        }
+        setTerminalName(terminal?.name ?? `Terminal`);
+        setLocationName(terminal?.location_name ?? "—");
+        setTerminalCode(terminal?.terminal_code ?? id.slice(0, 8));
+        applyLogsResponse(logsRes);
       } catch {
+        setLoadError("Failed to load terminal logs.");
         toast.error("Failed to load terminal logs.");
-        setTerminalName(`Terminal #${id.slice(-1)}`);
-        setLocationName("Downtown Branch");
-        setLogs(MOCK_LOGS);
-        setSelectedLog(MOCK_LOGS[3] ?? null);
-        setUseMockLogs(true);
-        setTotalLogs(985);
+        setLogs([]);
+        setSelectedLog(null);
+        setTotalLogs(0);
+        setTotalPagesLogs(1);
       } finally {
         setIsLoading(false);
       }
     };
     run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- applyLogsResponse is stable helper
   }, [id, page, limit, level, dateFrom]);
 
   const filteredLogs = useMemo(() => {
-    let data = expandedLogs;
+    let data = logs;
     if (q.trim()) {
       const keyword = q.trim().toLowerCase();
       data = data.filter(
@@ -313,19 +234,11 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
       data = data.filter((item) => item.source !== "User Action");
     }
     return data;
-  }, [expandedLogs, level, q, showSystemLogs, showUserActions]);
+  }, [logs, level, q, showSystemLogs, showUserActions]);
 
-  const totalPages = useMockLogs
-    ? Math.max(1, Math.ceil(filteredLogs.length / limit))
-    : totalPagesLogs;
+  const totalPages = totalPagesLogs;
   const currentPage = Math.min(page, totalPages);
-  const paginatedLogs = useMemo(() => {
-    if (useMockLogs) {
-      const start = (currentPage - 1) * limit;
-      return filteredLogs.slice(start, start + limit);
-    }
-    return filteredLogs;
-  }, [currentPage, filteredLogs, limit, useMockLogs]);
+  const paginatedLogs = filteredLogs;
 
   const refreshLogs = useCallback(async () => {
     try {
@@ -338,31 +251,29 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
           date_from: dateFrom,
         },
       });
-      const apiLogs = (logsRes as { logs?: unknown[] })?.logs;
-      if (apiLogs && Array.isArray(apiLogs)) {
-        const mapped = apiLogs.map((e) => mapApiLogToTerminalLog(e as Record<string, unknown>));
-        setLogs(mapped);
-        setUseMockLogs(false);
-        setSelectedLog(mapped[0] ?? null);
-        const pagination = (logsRes as { pagination?: { total_items?: number } })?.pagination;
-        setTotalLogs(pagination?.total_items ?? mapped.length);
-        setTotalPagesLogs((logsRes as { pagination?: { total_pages?: number } })?.pagination?.total_pages ?? 1);
-      } else {
-        setLogs(MOCK_LOGS);
-        setUseMockLogs(true);
-      }
+      applyLogsResponse(logsRes);
       toast.success("Logs refreshed.");
     } catch {
       toast.error("Failed to refresh logs.");
     } finally {
       setIsLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, page, limit, level, dateFrom]);
 
   const exportLogs = async () => {
     try {
       setIsExporting(true);
-      const from = dateRange === "24h" ? new Date(Date.now() - 864e5) : dateRange === "7d" ? new Date(Date.now() - 7 * 864e5) : dateRange === "30d" ? new Date(Date.now() - 30 * 864e5) : dateRange === "90d" ? new Date(Date.now() - 90 * 864e5) : new Date(Date.now() - 864e5);
+      const from =
+        dateRange === "24h"
+          ? new Date(Date.now() - 864e5)
+          : dateRange === "7d"
+            ? new Date(Date.now() - 7 * 864e5)
+            : dateRange === "30d"
+              ? new Date(Date.now() - 30 * 864e5)
+              : dateRange === "90d"
+                ? new Date(Date.now() - 90 * 864e5)
+                : new Date(Date.now() - 864e5);
       const blob = await orderzillaApi.dashboard.terminals.logs.export(id, {
         body: {
           format: "CSV",
@@ -415,7 +326,6 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
       setSelectedLog(null);
       setTotalLogs(0);
       setTotalPagesLogs(1);
-      setUseMockLogs(false);
       toast.success("Logs cleared.");
     } catch {
       toast.error("Failed to clear logs.");
@@ -453,7 +363,6 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
   }
 
   const displayLogs = paginatedLogs;
-  const displayTotalPages = totalPages;
 
   return (
     <div className="p-4">
@@ -470,7 +379,7 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
               <span>{terminalName}</span>
             </nav>
             <h1 className="text-[28px] sm:text-[36px] lg:text-[44px] leading-none font-extrabold text-[#1a2029] mt-1">
-              {terminalName} Detail
+              {terminalName || "Terminal"} Detail
             </h1>
           </div>
           <div className="flex items-center gap-2">
@@ -492,6 +401,15 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
             </button>
           </div>
         </div>
+
+        {loadError ? (
+          <div className="mt-3 rounded-lg border border-[#ffd2d2] bg-[#fff6f6] px-3 py-2 text-[12px] text-[#b42323]">
+            {loadError}{" "}
+            <button type="button" onClick={() => void refreshLogs()} className="font-semibold underline">
+              Retry
+            </button>
+          </div>
+        ) : null}
 
         <div className="mt-3 border-b border-[#e9ebef]">
           <div className="flex items-center gap-8 text-[15px] font-semibold">
@@ -522,8 +440,6 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
           </div>
         </div>
 
-
-        {/* Filters & Controls */}
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <div className="h-10 flex-1 min-w-[200px] max-w-md rounded-lg border border-[#e4e6ea] bg-white px-3 flex items-center gap-2">
             <Search size={16} className="text-[#97a0ad]" />
@@ -588,7 +504,7 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
           </div>
           <button
             type="button"
-            onClick={refreshLogs}
+            onClick={() => void refreshLogs()}
             className="h-10 w-10 rounded-lg border border-[#dfe3e8] bg-white flex items-center justify-center text-[#6e7785] hover:text-[#2f3743]"
             aria-label="Refresh logs"
           >
@@ -666,8 +582,8 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
             <div className="px-3 py-2 border-t border-[#e9ebef] bg-[#fafbfc]">
               <TablePagination
                 page={currentPage}
-                totalPages={displayTotalPages}
-                totalItems={useMockLogs ? filteredLogs.length : totalLogs}
+                totalPages={totalPages}
+                totalItems={totalLogs}
                 pageSize={limit}
                 pageSizeOptions={[10, 20, 50]}
                 label="logs"
@@ -715,31 +631,20 @@ export default function TerminalDetailLogsPage({ id }: TerminalDetailLogsPagePro
                 </div>
               </div>
               <div>
-                <p className="text-[12px] font-semibold text-[#6e7785] mb-1">Stack Trace</p>
-                <div className="rounded-lg bg-[#f6f7f9] p-3 text-[12px] text-[#2f3743] font-mono whitespace-pre-wrap break-words">
-                  {selectedLog?.stackTrace ?? "-"}
-                </div>
-              </div>
-              <div>
                 <p className="text-[12px] font-semibold text-[#6e7785] mb-1">Device Metadata</p>
-                <div className="rounded-lg bg-[#f6f7f9] p-3 text-[12px] text-[#2f3743] space-y-1">
-                  {selectedLog?.deviceMetadata ? (
-                    <>
-                      <p>OS: {selectedLog.deviceMetadata.os ?? "-"}</p>
-                      <p>App: {selectedLog.deviceMetadata.app ?? "-"}</p>
-                      <p>Network: {selectedLog.deviceMetadata.network ?? "-"}</p>
-                    </>
-                  ) : (
-                    <p className="italic text-[#8a92a0]">-</p>
-                  )}
-                </div>
+                <p className="text-[13px] text-[#2f3743]">
+                  {selectedLog?.deviceMetadata
+                    ? `OS: ${selectedLog.deviceMetadata.os ?? "—"}, App: ${selectedLog.deviceMetadata.app ?? "—"}, Network: ${selectedLog.deviceMetadata.network ?? "—"}`
+                    : "—"}
+                </p>
               </div>
               <button
                 type="button"
                 onClick={copyToClipboard}
-                className="h-10 w-full rounded-lg border border-[#dfe3e8] bg-white text-[14px] font-semibold text-[#3f4653] hover:bg-[#f9fafb]"
+                disabled={!selectedLog}
+                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] disabled:opacity-50"
               >
-                Copy to clipboard
+                Copy details
               </button>
             </div>
           </article>

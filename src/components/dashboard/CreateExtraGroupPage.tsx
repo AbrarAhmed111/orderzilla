@@ -33,6 +33,14 @@ const makeOptionRow = (index = 0): OptionRow => ({
   sortOrder: index,
 });
 
+/** API may return id as string or number, or under option_id — needed for DELETE / sync. */
+function extraOptionServerId(option: { id?: unknown; option_id?: unknown }): string | undefined {
+  const raw = option.id ?? option.option_id;
+  if (raw === undefined || raw === null) return undefined;
+  const s = String(raw).trim();
+  return s.length > 0 ? s : undefined;
+}
+
 export default function CreateExtraGroupPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -76,7 +84,7 @@ export default function CreateExtraGroupPage() {
       setSortOrder(typeof group?.sort_order === "number" ? group.sort_order : 0);
       const mappedOptions = (optionsResp?.options ?? []).map((option, index) => ({
         localId: crypto.randomUUID(),
-        id: option.id,
+        id: extraOptionServerId(option as { id?: unknown; option_id?: unknown }),
         name: toDisplayValue(option.name, ""),
         priceAdd: toDisplayValue(option.price_add, "0.00"),
         sortOrder: typeof option.sort_order === "number" ? option.sort_order : index,
@@ -110,66 +118,83 @@ export default function CreateExtraGroupPage() {
     setOptions((prev) => prev.map((opt) => (opt.localId === localId ? { ...opt, [key]: value } : opt)));
   };
 
+  const removeOptionRow = async (row: OptionRow) => {
+    const serverId = row.id?.trim();
+    if (groupId && serverId) {
+      try {
+        await orderzillaApi.dashboard.extras.options.remove(groupId, serverId);
+      } catch {
+        toast.error("Could not remove this option on the server. Try Save to sync.");
+      }
+    }
+    setOptions((prev) => {
+      const next = prev.filter((opt) => opt.localId !== row.localId);
+      return next.length > 0 ? next : [makeOptionRow(0)];
+    });
+  };
+
   const syncOptions = async (id: string) => {
     const existingResp = await orderzillaApi.dashboard.extras.options.list(id);
     const existing = existingResp?.options ?? [];
-    const existingIds = new Set(existing.map((opt) => opt.id).filter(Boolean) as string[]);
+    const existingIds = new Set(
+      existing
+        .map((opt) => extraOptionServerId(opt as { id?: unknown; option_id?: unknown }))
+        .filter((x): x is string => Boolean(x)),
+    );
 
     const prepared = options
       .map((opt, index) => ({
         ...opt,
+        id: opt.id?.trim() || undefined,
         name: opt.name.trim(),
         priceAdd: opt.priceAdd.trim(),
         sortOrder: index,
       }))
       .filter((opt) => opt.name.length > 0);
 
-    await Promise.all(
-      prepared
-        .filter((opt) => !opt.id)
-        .map((opt) =>
-          orderzillaApi.dashboard.extras.options.create(id, {
-            body: {
-              name: opt.name,
-              price_add: opt.priceAdd || "0.00",
-              sort_order: opt.sortOrder,
-              translations: description
-                ? ({
-                    de: { name: opt.name, description },
-                    en: { name: opt.name, description },
-                  } as never)
-                : undefined,
-            },
-          }),
-        ),
+    const keptIds = new Set(
+      prepared.map((opt) => opt.id).filter((x): x is string => Boolean(x && x.trim())),
     );
-
-    await Promise.all(
-      prepared
-        .filter((opt): opt is OptionRow & { id: string; name: string } => Boolean(opt.id && opt.name))
-        .map((opt) =>
-          orderzillaApi.dashboard.extras.options.update(id, opt.id, {
-            body: {
-              name: opt.name,
-              price_add: opt.priceAdd || "0.00",
-              sort_order: opt.sortOrder,
-              translations: description
-                ? ({
-                    de: { name: opt.name, description },
-                    en: { name: opt.name, description },
-                  } as never)
-                : undefined,
-            },
-          }),
-        ),
-    );
-
-    const keptIds = new Set(prepared.map((opt) => opt.id).filter(Boolean) as string[]);
     const toDelete = [...existingIds].filter((existingId) => !keptIds.has(existingId));
-    if (toDelete.length > 0) {
-      await Promise.all(
-        toDelete.map((optId) => orderzillaApi.dashboard.extras.options.remove(id, optId)),
-      );
+
+    for (const optId of toDelete) {
+      try {
+        await orderzillaApi.dashboard.extras.options.remove(id, optId);
+      } catch {
+        /* ignore single failure; others may still apply */
+      }
+    }
+
+    for (const opt of prepared.filter((o) => !o.id)) {
+      await orderzillaApi.dashboard.extras.options.create(id, {
+        body: {
+          name: opt.name,
+          price_add: opt.priceAdd || "0.00",
+          sort_order: opt.sortOrder,
+          translations: description
+            ? ({
+                de: { name: opt.name, description },
+                en: { name: opt.name, description },
+              } as never)
+            : undefined,
+        },
+      });
+    }
+
+    for (const opt of prepared.filter((o): o is OptionRow & { id: string } => Boolean(o.id?.trim()))) {
+      await orderzillaApi.dashboard.extras.options.update(id, opt.id.trim(), {
+        body: {
+          name: opt.name,
+          price_add: opt.priceAdd || "0.00",
+          sort_order: opt.sortOrder,
+          translations: description
+            ? ({
+                de: { name: opt.name, description },
+                en: { name: opt.name, description },
+              } as never)
+            : undefined,
+        },
+      });
     }
   };
 
@@ -474,12 +499,8 @@ export default function CreateExtraGroupPage() {
                         <td className="px-3 py-2 text-right">
                           <button
                             type="button"
-                            onClick={() =>
-                              setOptions((prev) =>
-                                prev.length <= 1 ? prev : prev.filter((opt) => opt.localId !== row.localId),
-                              )
-                            }
-                            className="rounded border border-[#efc3c3] px-2 py-1 text-[12px] font-semibold text-[#cf4a4a]"
+                            onClick={() => void removeOptionRow(row)}
+                            className="rounded border border-[#efc3c3] px-2 py-1 text-[12px] font-semibold text-[#cf4a4a] hover:bg-[#fef2f2]"
                           >
                             Remove
                           </button>

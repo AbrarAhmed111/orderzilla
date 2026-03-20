@@ -66,10 +66,26 @@ export type DashboardSettings = {
   enable_gift_cards?: boolean;
   default_payment_method?: string;
   enable_loyalty_program?: boolean;
+  /** Rounding step label, e.g. "0.05", "0.10", "0.01" */
+  price_rounding_step?: string;
+  /** Display: "comma" | "dot" */
+  decimal_separator?: string;
+  print_receipt_automatically?: boolean;
+  email_receipt_enabled?: boolean;
+  /** Terminal or printer id for kitchen routing */
+  kitchen_printer_terminal_id?: string;
+  idle_screen_timeout_seconds?: number;
+  auto_refresh_menu_enabled?: boolean;
+  maintenance_mode?: boolean;
+  terminal_auto_close_seconds?: number;
+  order_timeout_seconds?: number;
+  allow_price_override?: boolean;
+  enable_debug_logs?: boolean;
 };
 
 export type DashboardSettingsInput = {
   company_name?: string;
+  logo_url?: string | null;
   primary_brand_color?: string;
   receipt_footer_text?: string;
   address?: DashboardSettingsAddress;
@@ -82,6 +98,18 @@ export type DashboardSettingsInput = {
   enable_gift_cards?: boolean;
   default_payment_method?: string;
   enable_loyalty_program?: boolean;
+  price_rounding_step?: string;
+  decimal_separator?: string;
+  print_receipt_automatically?: boolean;
+  email_receipt_enabled?: boolean;
+  kitchen_printer_terminal_id?: string;
+  idle_screen_timeout_seconds?: number;
+  auto_refresh_menu_enabled?: boolean;
+  maintenance_mode?: boolean;
+  terminal_auto_close_seconds?: number;
+  order_timeout_seconds?: number;
+  allow_price_override?: boolean;
+  enable_debug_logs?: boolean;
 };
 
 export type ExportLogsInput = {
@@ -107,6 +135,7 @@ export type UserCreateInput = {
   can_manage_products?: boolean;
   can_manage_loyalty?: boolean;
   is_active?: boolean;
+  avatar_url?: string;
 };
 
 export type UserUpdateInput = {
@@ -135,6 +164,7 @@ export type UserRecord = {
   location_names?: string[];
   can_manage_products?: boolean;
   can_manage_loyalty?: boolean;
+  avatar_url?: string | null;
 };
 
 export type UserListResponse = {
@@ -173,6 +203,38 @@ export type OrderListQuery = {
   terminal_id?: string;
   date_from?: string;
   date_to?: string;
+};
+
+/** Optional aggregate counts returned by GET /v1/dashboard/orders (see Postman). Keys may be upper or lower case. */
+export type OrderListStatusCounts = Partial<
+  Record<
+    | "PENDING"
+    | "CONFIRMED"
+    | "PREPARING"
+    | "READY"
+    | "COMPLETED"
+    | "CANCELLED"
+    | "pending"
+    | "confirmed"
+    | "preparing"
+    | "ready"
+    | "completed"
+    | "cancelled"
+    | "all"
+    | "total",
+    number
+  >
+>;
+
+export type OrderListResponse = {
+  orders?: unknown[];
+  pagination?: {
+    current_page?: number;
+    total_pages?: number;
+    total_items?: number;
+    items_per_page?: number;
+  };
+  status_counts?: OrderListStatusCounts;
 };
 
 export type TerminalDisplayContent = {
@@ -469,9 +531,7 @@ export const orderzillaApi = {
         });
         const qs = params.toString();
         return axiosInstance
-          .get<{ orders?: unknown[]; pagination?: { current_page?: number; total_pages?: number; total_items?: number; items_per_page?: number } }>(
-            `/v1/dashboard/orders${qs ? `?${qs}` : ""}`,
-          )
+          .get<OrderListResponse>(`/v1/dashboard/orders${qs ? `?${qs}` : ""}`)
           .then((r) => r.data);
       },
       create: (options: { body: OrderCreateInput }) =>
@@ -501,6 +561,8 @@ export const orderzillaApi = {
           pathParams: { id },
           ...options,
         }),
+      remove: (id: string) =>
+        axiosInstance.delete<{ ok?: boolean }>(`/v1/dashboard/orders/${id}`).then((r) => r.data),
     },
     categories: {
       list: (options: RequestOptionsFor<"/v1/dashboard/categories", "get"> = {}) =>

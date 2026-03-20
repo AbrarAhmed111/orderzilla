@@ -44,6 +44,22 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => v
 
 const TX_PAGE_SIZE = 20;
 
+/** API may return snake_case or camelCase; value may be date string, ISO datetime, or timestamp. */
+function loyaltyBirthDateToInput(data: unknown): string {
+  if (data == null || typeof data !== "object") return "";
+  const o = data as Record<string, unknown>;
+  const raw = o.birth_date ?? o.birthDate;
+  if (raw == null || raw === "") return "";
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  }
+  const s = String(raw).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+}
+
 export default function EditCustomerPage({ id }: EditCustomerPageProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -85,10 +101,10 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
         setTransactions(txList);
         setHasMoreTx(txList.length >= TX_PAGE_SIZE);
         const fullName = `${toDisplayValue(customerData?.first_name, "")} ${toDisplayValue(customerData?.last_name, "")}`.trim();
-        setName(fullName || EMPTY_VALUE);
+        setName(fullName);
         setEmail(customerData?.email ?? "");
         setPhone(customerData?.phone ?? "");
-        setBirthDate(customerData?.birth_date ? String(customerData.birth_date).slice(0, 10) : "");
+        setBirthDate(loyaltyBirthDateToInput(customerData));
         setTier(customerData?.tier ?? "STANDARD");
         setPoints(String(customerData?.points_balance ?? 0));
         setActive(customerData?.is_active ?? true);
@@ -111,19 +127,26 @@ export default function EditCustomerPage({ id }: EditCustomerPageProps) {
     if (!id) return;
     try {
       setIsSaving(true);
-      const [first_name, ...rest] = name.trim().split(" ");
+      const trimmedName = name.trim();
+      const [first_name, ...rest] = trimmedName.split(/\s+/).filter(Boolean);
       const last_name = rest.join(" ");
+      const birthIso = birthDate.trim().slice(0, 10);
+      const hasBirth = Boolean(birthIso && /^\d{4}-\d{2}-\d{2}$/.test(birthIso));
+      /** Some backends expect camelCase JSON; send both when set. Omit when empty so strict APIs don’t reject null. */
+      const birthPayload = hasBirth ? { birth_date: birthIso, birthDate: birthIso } : {};
+
       await orderzillaApi.dashboard.loyalty.customers.update(id, {
         body: {
           first_name: first_name || undefined,
           last_name: last_name || undefined,
-          email: email || undefined,
-          phone: phone || undefined,
-          birth_date: birthDate || undefined,
+          email: email.trim() || undefined,
+          phone: phone.trim() || undefined,
+          ...birthPayload,
           is_active: active,
-        },
+        } as Parameters<typeof orderzillaApi.dashboard.loyalty.customers.update>[1]["body"],
       });
       toast.success("Customer updated.");
+      await fetchData(txPage);
     } catch {
       toast.error("Failed to update customer.");
     } finally {
