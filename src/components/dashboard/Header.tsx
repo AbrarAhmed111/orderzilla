@@ -24,7 +24,7 @@ export default function Header() {
     timelineParam === "thisMonth" ||
     timelineParam === "all"
       ? timelineParam
-      : "last7";
+      : "all";
   const selectedLocation = locationParam ?? "all";
 
   useEffect(() => {
@@ -53,7 +53,7 @@ export default function Header() {
     const timeline = next.timeline ?? selectedTimeline;
     const location = next.location ?? selectedLocation;
 
-    if (timeline === "last7") params.delete("timeline");
+    if (timeline === "all") params.delete("timeline");
     else params.set("timeline", timeline);
 
     if (location === "all") params.delete("location");

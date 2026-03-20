@@ -126,10 +126,10 @@ export default function MissingEndpointsPage() {
           <Li>List search/filters are client-side only — no list API query params for filter/search.</Li>
         </Section>
 
-        <Section title="Orders" route="/dashboard/orders">
+        <Section title="Orders" route="/dashboard/orders · /dashboard/orders/order-detail/[id]">
           <Li>
-            <code className="rounded bg-[#fef3c7] px-1">GET /v1/dashboard/orders/{`{id}`}</code> (order detail) returns internal
-            server error — detail screen cannot load until the API is fixed.
+            <code className="rounded bg-[#fef3c7] px-1">GET /v1/dashboard/orders/{`{id}`}</code> — internal server error; order
+            detail page cannot load until the API is fixed.
           </Li>
           <Li>Tab totals wrong or partial when <code className="rounded bg-[#fef3c7] px-1">status_counts</code> omitted from list response.</Li>
           <Li>Payment method filter is client-side on the current page only — no server list filter param.</Li>

@@ -96,7 +96,7 @@ export default function Overview() {
     timelineParam === "thisMonth" ||
     timelineParam === "all"
       ? timelineParam
-      : "last7";
+      : "all";
   const locationId = locationParam && locationParam !== "all" ? locationParam : undefined;
 
   const [cards, setCards] = useState<MetricCard[]>([]);
