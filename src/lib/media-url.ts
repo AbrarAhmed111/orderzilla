@@ -1,8 +1,4 @@
-/**
- * Image URLs for <img src>. API returns absolute public URLs (e.g. …/uploads/…); use them directly.
- * Local previews (blob:, data:) are unchanged.
- */
-
+/** Use API image URLs as-is; blob/data previews unchanged. */
 export function proxiedImageSrc(raw: string | null | undefined): string | undefined {
   if (raw == null) return undefined;
   const url = String(raw).trim();
@@ -11,7 +7,6 @@ export function proxiedImageSrc(raw: string | null | undefined): string | undefi
   return url;
 }
 
-/** Local file preview (blob) wins over remote/path URL. */
 export function displayImageSrc(
   localPreview: string | null | undefined,
   remoteOrRelative: string | null | undefined,

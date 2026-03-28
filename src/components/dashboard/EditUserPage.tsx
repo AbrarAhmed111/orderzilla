@@ -97,7 +97,6 @@ export default function EditUserPage({ id }: EditUserPageProps) {
   const [showSetPasswordModal, setShowSetPasswordModal] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [isResettingPassword, setIsResettingPassword] = useState(false);
-  const [isSendingPasswordReset, setIsSendingPasswordReset] = useState(false);
   const [error, setError] = useState("");
   const [isOwner, setIsOwner] = useState(false);
 
@@ -261,20 +260,6 @@ export default function EditUserPage({ id }: EditUserPageProps) {
     } finally {
       setIsDeleting(false);
       setShowDeleteConfirm(false);
-    }
-  };
-
-  const onSendPasswordReset = async () => {
-    if (isOwner) return;
-    try {
-      setIsSendingPasswordReset(true);
-      await orderzillaApi.dashboard.users.sendPasswordReset(id);
-      setRequirePasswordReset(true);
-      toast.success("User will be asked to reset their password on next login. No email is sent yet.");
-    } catch {
-      toast.error("Failed to trigger password reset.");
-    } finally {
-      setIsSendingPasswordReset(false);
     }
   };
 
@@ -575,19 +560,6 @@ export default function EditUserPage({ id }: EditUserPageProps) {
                     onToggle={setRequirePasswordReset}
                     disabled={isOwner}
                   />
-                </div>
-                <div className="space-y-1">
-                  <button
-                    type="button"
-                    onClick={() => void onSendPasswordReset()}
-                    disabled={isOwner || isSendingPasswordReset}
-                    className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855] disabled:opacity-50"
-                  >
-                    {isSendingPasswordReset ? "Applying..." : "Require reset on next login"}
-                  </button>
-                  <p className="text-[11px] text-[#6e7785]">
-                    Calls the server to set the reset flag (no email). Same effect as turning on “Require password reset” above.
-                  </p>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-[14px] font-semibold text-[#363f4c]">

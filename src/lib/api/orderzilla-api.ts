@@ -136,7 +136,6 @@ export type UserCreateInput = {
   can_manage_loyalty?: boolean;
   is_active?: boolean;
   avatar_url?: string;
-  require_password_reset?: boolean;
 };
 
 export type UserUpdateInput = {
@@ -1119,7 +1118,7 @@ export const orderzillaApi = {
           ...options,
         }),
       sendPasswordReset: (id: string) =>
-        axiosInstance.post<unknown>(`/v1/dashboard/users/${id}/send-password-reset`).then((r) => r.data),
+        axiosInstance.post(`/v1/dashboard/users/${id}/send-password-reset`).then((r) => r.data),
     },
   },
 };

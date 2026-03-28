@@ -1050,15 +1050,7 @@ export default function UsersPage() {
                 void submitResetPassword();
               }}
             >
-              {/*
-                Absorbs browser/password-manager "username" autofill so it does not target the table filter
-                (which appears earlier in the document and looks like an email field).
-              */}
-              <label htmlFor="dashboard-reset-password-username-decoy" className="sr-only">
-                Account hint (ignored)
-              </label>
               <input
-                id="dashboard-reset-password-username-decoy"
                 type="text"
                 name="dashboard_reset_password_username_decoy"
                 autoComplete="username"

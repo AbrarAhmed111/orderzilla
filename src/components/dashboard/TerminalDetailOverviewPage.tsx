@@ -521,6 +521,24 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
                     {toDisplayValue((terminal as { serial_number?: string })?.serial_number, EMPTY_VALUE)}
                   </span>
                 </div>
+                <div className="flex justify-between items-center pt-2 border-t border-[#e9ebef]">
+                  <span className="text-[#6e7785]">Active</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={isActive}
+                    onClick={toggleActive}
+                    className={`h-6 w-11 rounded-full transition-colors ${
+                      isActive ? "bg-[#d4ff00]" : "bg-[#e5e7eb]"
+                    }`}
+                  >
+                    <span
+                      className={`block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                        isActive ? "translate-x-6" : "translate-x-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
             </article>
 
@@ -628,72 +646,6 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
                     {toDisplayValue((terminal as { network_status?: string })?.network_status, EMPTY_VALUE)}
                   </span>
                   <span className="h-2 w-2 rounded-full bg-[#22c55e]" />
-                </div>
-              </div>
-            </article>
-
-            <article className="rounded-xl border border-[#e4e6ea] bg-white p-4">
-              <h2 className="text-[18px] font-bold text-[#1a212c]">Quick Actions</h2>
-              <div className="mt-4 space-y-3">
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => sendCommand("SHOW_MESSAGE")}
-                    disabled={isSending}
-                    className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[13px] font-semibold text-[#414855] disabled:opacity-50"
-                  >
-                    Send Message
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => sendCommand("RELOAD_MENU")}
-                    disabled={isSending}
-                    className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[13px] font-semibold text-[#414855] disabled:opacity-50"
-                  >
-                    Reload Menu
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => sendCommand("RELOAD_CONFIG")}
-                    disabled={isSending}
-                    className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[13px] font-semibold text-[#414855] disabled:opacity-50"
-                  >
-                    Reload Config
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => sendCommand("MAINTENANCE_MODE")}
-                    disabled={isSending}
-                    className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[13px] font-semibold text-[#414855] disabled:opacity-50"
-                  >
-                    Enter Maintenance Mode
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => sendCommand("REBOOT")}
-                    disabled={isSending}
-                    className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[13px] font-semibold text-[#414855] disabled:opacity-50"
-                  >
-                    Reboot
-                  </button>
-                </div>
-                <div className="flex items-center justify-between pt-2">
-                  <span className="text-[14px] font-semibold text-[#363f4c]">Active</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={isActive}
-                    onClick={toggleActive}
-                    className={`h-6 w-11 rounded-full transition-colors ${
-                      isActive ? "bg-[#d4ff00]" : "bg-[#e5e7eb]"
-                    }`}
-                  >
-                    <span
-                      className={`block h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                        isActive ? "translate-x-6" : "translate-x-0.5"
-                      }`}
-                    />
-                  </button>
                 </div>
               </div>
             </article>
