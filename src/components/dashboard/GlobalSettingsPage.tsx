@@ -205,6 +205,7 @@ export default function GlobalSettingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   const [locations, setLocations] = useState<ApiLocation[]>([]);
   const [loyaltyProgram, setLoyaltyProgram] = useState<ApiLoyaltyProgram | null>(null);
@@ -391,14 +392,17 @@ export default function GlobalSettingsPage() {
     }
   };
 
-  const handleResetDefaults = () => {
-    setCompany(DEFAULT_COMPANY);
-    setTax(DEFAULT_TAX);
-    setReceipt(DEFAULT_RECEIPT);
-    setPayment(DEFAULT_PAYMENT);
-    setOperational(DEFAULT_OPERATIONAL);
-    setSystem(DEFAULT_SYSTEM);
-    toast.success("Reset to defaults.");
+  const handleResetDefaults = async () => {
+    try {
+      setIsResetting(true);
+      await orderzillaApi.dashboard.settings.reset();
+      toast.success("Organization settings reset to server defaults.");
+      await fetchData();
+    } catch {
+      toast.error("Failed to reset settings.");
+    } finally {
+      setIsResetting(false);
+    }
   };
 
   const [isExportingLogs, setIsExportingLogs] = useState(false);
@@ -623,10 +627,11 @@ export default function GlobalSettingsPage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleResetDefaults}
-              className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] hover:bg-[#f9fafb]"
+              onClick={() => void handleResetDefaults()}
+              disabled={isResetting || isSaving}
+              className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] hover:bg-[#f9fafb] disabled:opacity-50"
             >
-              Reset Defaults
+              {isResetting ? "Resetting..." : "Reset Defaults"}
             </button>
             <button
               type="button"

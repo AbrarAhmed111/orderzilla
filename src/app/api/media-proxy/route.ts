@@ -22,20 +22,6 @@ function isBlockedHostname(hostname: string): boolean {
   return false;
 }
 
-function hostAllowedByEnv(hostname: string): boolean {
-  const raw = process.env.ORDERZILLA_MEDIA_PROXY_ALLOW_HOSTS?.trim();
-  if (!raw) return true;
-  const rules = raw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  const host = hostname.toLowerCase();
-  return rules.some((rule) => {
-    if (rule.startsWith("*.")) {
-      const base = rule.slice(2);
-      return host === base || host.endsWith(`.${base}`);
-    }
-    return host === rule;
-  });
-}
-
 export async function GET(request: NextRequest) {
   const raw = request.nextUrl.searchParams.get("url");
   if (!raw?.trim()) {
@@ -55,10 +41,6 @@ export async function GET(request: NextRequest) {
 
   if (isBlockedHostname(target.hostname)) {
     return NextResponse.json({ message: "Host not allowed" }, { status: 403 });
-  }
-
-  if (!hostAllowedByEnv(target.hostname)) {
-    return NextResponse.json({ message: "Host not in ORDERZILLA_MEDIA_PROXY_ALLOW_HOSTS" }, { status: 403 });
   }
 
   try {

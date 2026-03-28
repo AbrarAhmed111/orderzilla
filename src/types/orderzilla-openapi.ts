@@ -1831,7 +1831,13 @@ export interface paths {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        command: "RELOAD_MENU" | "SHOW_MESSAGE" | "MAINTENANCE_MODE" | "CLEAR_MAINTENANCE";
+                        command:
+                            | "RELOAD_MENU"
+                            | "RELOAD_CONFIG"
+                            | "SHOW_MESSAGE"
+                            | "MAINTENANCE_MODE"
+                            | "CLEAR_MAINTENANCE"
+                            | "REBOOT";
                         /**
                          * @example {
                          *       "message": "Wir schliessen in 10 Minuten."
@@ -2307,6 +2313,7 @@ export interface paths {
                         /** @enum {string} */
                         role?: "ADMIN" | "MANAGER" | "VIEWER";
                         is_active?: boolean;
+                        require_password_reset?: boolean;
                     };
                 };
             };
@@ -2375,6 +2382,43 @@ export interface paths {
                     };
                 };
             };
+            responses: {
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Ok"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/dashboard/users/{id}/send-password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sets require_password_reset; user is prompted on next login (no email yet). */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
             responses: {
                 200: {
                     headers: {
@@ -2851,6 +2895,7 @@ export interface components {
             /** @enum {string} */
             role?: "OWNER" | "ADMIN" | "MANAGER" | "VIEWER";
             is_active?: boolean;
+            require_password_reset?: boolean;
             /** Format: date-time */
             created_at?: string;
         };

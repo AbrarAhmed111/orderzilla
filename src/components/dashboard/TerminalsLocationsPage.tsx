@@ -75,7 +75,13 @@ type TerminalCreatedResponse = {
   };
 };
 
-type CommandType = "RELOAD_MENU" | "SHOW_MESSAGE" | "MAINTENANCE_MODE" | "CLEAR_MAINTENANCE";
+type CommandType =
+  | "RELOAD_MENU"
+  | "RELOAD_CONFIG"
+  | "SHOW_MESSAGE"
+  | "MAINTENANCE_MODE"
+  | "CLEAR_MAINTENANCE"
+  | "REBOOT";
 
 const MODE_OPTIONS = [
   { label: "All Types", value: "all" },
@@ -93,9 +99,11 @@ const STATUS_OPTIONS = [
 
 const COMMAND_OPTIONS = [
   { label: "Reload Menu", value: "RELOAD_MENU" },
+  { label: "Reload Config", value: "RELOAD_CONFIG" },
   { label: "Show Message", value: "SHOW_MESSAGE" },
   { label: "Maintenance Mode", value: "MAINTENANCE_MODE" },
   { label: "Clear Maintenance", value: "CLEAR_MAINTENANCE" },
+  { label: "Reboot", value: "REBOOT" },
 ];
 
 const mapTerminal = (item: ApiTerminal): TerminalRow => ({

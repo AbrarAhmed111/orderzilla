@@ -136,6 +136,7 @@ export type UserCreateInput = {
   can_manage_loyalty?: boolean;
   is_active?: boolean;
   avatar_url?: string;
+  require_password_reset?: boolean;
 };
 
 export type UserUpdateInput = {
@@ -148,6 +149,7 @@ export type UserUpdateInput = {
   is_active?: boolean;
   role?: "ADMIN" | "MANAGER" | "VIEWER";
   avatar_url?: string;
+  require_password_reset?: boolean;
 };
 
 export type UserRecord = {
@@ -159,6 +161,7 @@ export type UserRecord = {
   phone?: string;
   role?: string;
   is_active?: boolean;
+  require_password_reset?: boolean;
   created_at?: string;
   location_ids?: string[];
   location_names?: string[];
@@ -489,6 +492,10 @@ export const orderzillaApi = {
       },
       update: async (body: DashboardSettingsInput) => {
         const res = await axiosInstance.put<DashboardSettings>("/v1/dashboard/settings", body);
+        return res.data;
+      },
+      reset: async () => {
+        const res = await axiosInstance.post<DashboardSettings>("/v1/dashboard/settings/reset");
         return res.data;
       },
       exportLogs: async (body: ExportLogsInput) => {
@@ -1111,6 +1118,8 @@ export const orderzillaApi = {
           pathParams: { id },
           ...options,
         }),
+      sendPasswordReset: (id: string) =>
+        axiosInstance.post<unknown>(`/v1/dashboard/users/${id}/send-password-reset`).then((r) => r.data),
     },
   },
 };

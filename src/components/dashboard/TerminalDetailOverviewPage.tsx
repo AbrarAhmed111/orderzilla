@@ -100,10 +100,14 @@ function mergeAssignments(catalog: LocationRow[], fromApi: { id: string; enabled
 
 const commandOptions = [
   { label: "Reload Menu", value: "RELOAD_MENU" },
+  { label: "Reload Config", value: "RELOAD_CONFIG" },
   { label: "Show Message", value: "SHOW_MESSAGE" },
   { label: "Maintenance Mode", value: "MAINTENANCE_MODE" },
   { label: "Clear Maintenance", value: "CLEAR_MAINTENANCE" },
+  { label: "Reboot", value: "REBOOT" },
 ] as const;
+
+type TerminalCommandValue = (typeof commandOptions)[number]["value"];
 
 function formatLastSeen(iso?: string | null) {
   if (!iso) return EMPTY_VALUE;
@@ -128,8 +132,7 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
   const [terminal, setTerminal] = useState<ApiTerminal | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
-  const [command, setCommand] =
-    useState<(typeof commandOptions)[number]["value"]>("RELOAD_MENU");
+  const [command, setCommand] = useState<TerminalCommandValue>("RELOAD_MENU");
   const [commandMessage, setCommandMessage] = useState("");
   const [assignedLocations, setAssignedLocations] = useState<AssignedLocation[]>([]);
   const [locationCatalog, setLocationCatalog] = useState<LocationRow[]>([]);
@@ -230,9 +233,7 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
     fetchData();
   }, [fetchData]);
 
-  const sendCommand = async (
-    cmd?: (typeof commandOptions)[number]["value"],
-  ) => {
+  const sendCommand = async (cmd?: TerminalCommandValue) => {
     const effectiveCmd = cmd ?? command;
     if (effectiveCmd === "SHOW_MESSAGE" && !commandMessage.trim()) {
       toast.error("Message is required for SHOW_MESSAGE.");
@@ -424,7 +425,30 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <select
+              value={command}
+              onChange={(e) => setCommand(e.target.value as TerminalCommandValue)}
+              disabled={isSending}
+              className="h-10 min-w-[160px] rounded-lg border border-[#dfe3e8] bg-white px-3 text-[13px] font-medium text-[#2f3743] disabled:opacity-50"
+              aria-label="Terminal command"
+            >
+              {commandOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            {command === "SHOW_MESSAGE" ? (
+              <input
+                type="text"
+                value={commandMessage}
+                onChange={(e) => setCommandMessage(e.target.value)}
+                placeholder="Message text"
+                disabled={isSending}
+                className="h-10 min-w-[200px] flex-1 max-w-sm rounded-lg border border-[#dfe3e8] px-3 text-[13px] outline-none focus:border-[#c0eb1a] disabled:opacity-50"
+              />
+            ) : null}
             <button
               type="button"
               onClick={() => sendCommand()}
@@ -630,6 +654,14 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
                   </button>
                   <button
                     type="button"
+                    onClick={() => sendCommand("RELOAD_CONFIG")}
+                    disabled={isSending}
+                    className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[13px] font-semibold text-[#414855] disabled:opacity-50"
+                  >
+                    Reload Config
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => sendCommand("MAINTENANCE_MODE")}
                     disabled={isSending}
                     className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[13px] font-semibold text-[#414855] disabled:opacity-50"
@@ -638,8 +670,9 @@ export default function TerminalDetailOverviewPage({ id }: TerminalDetailOvervie
                   </button>
                   <button
                     type="button"
-                    disabled
-                    className="h-9 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-4 text-[13px] font-semibold text-[#9ca3af] cursor-not-allowed"
+                    onClick={() => sendCommand("REBOOT")}
+                    disabled={isSending}
+                    className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[13px] font-semibold text-[#414855] disabled:opacity-50"
                   >
                     Reboot
                   </button>

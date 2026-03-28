@@ -97,6 +97,7 @@ export default function EditUserPage({ id }: EditUserPageProps) {
   const [showSetPasswordModal, setShowSetPasswordModal] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [isResettingPassword, setIsResettingPassword] = useState(false);
+  const [isSendingPasswordReset, setIsSendingPasswordReset] = useState(false);
   const [error, setError] = useState("");
   const [isOwner, setIsOwner] = useState(false);
 
@@ -160,6 +161,9 @@ export default function EditUserPage({ id }: EditUserPageProps) {
       setCreatedBy(toDisplayValue(ext.created_by, EMPTY_VALUE));
       setLoginActivity(ext.login_activity ?? []);
       setTwoFactorEnabled((user as { two_factor_enabled?: boolean })?.two_factor_enabled ?? true);
+      setRequirePasswordReset(
+        (user as { require_password_reset?: boolean })?.require_password_reset ?? false,
+      );
     } catch {
       setError("Failed to load user.");
       setFirstName("");
@@ -172,6 +176,7 @@ export default function EditUserPage({ id }: EditUserPageProps) {
       setCreatedAt(EMPTY_VALUE);
       setCreatedBy(EMPTY_VALUE);
       setLoginActivity([]);
+      setRequirePasswordReset(false);
     } finally {
       setIsLoading(false);
     }
@@ -208,6 +213,7 @@ export default function EditUserPage({ id }: EditUserPageProps) {
           can_manage_products: canManageProducts,
           can_manage_loyalty: canManageLoyalty,
           is_active: isActive,
+          require_password_reset: requirePasswordReset,
           role: role === "OWNER" ? undefined : (role as "ADMIN" | "MANAGER" | "VIEWER"),
           avatar_url: avatarUrl.trim() || undefined,
         },
@@ -258,8 +264,18 @@ export default function EditUserPage({ id }: EditUserPageProps) {
     }
   };
 
-  const onSendPasswordReset = () => {
-    toast("Send password reset link: Backend endpoint not available.");
+  const onSendPasswordReset = async () => {
+    if (isOwner) return;
+    try {
+      setIsSendingPasswordReset(true);
+      await orderzillaApi.dashboard.users.sendPasswordReset(id);
+      setRequirePasswordReset(true);
+      toast.success("User will be asked to reset their password on next login. No email is sent yet.");
+    } catch {
+      toast.error("Failed to trigger password reset.");
+    } finally {
+      setIsSendingPasswordReset(false);
+    }
   };
 
   const onSetNewPassword = async () => {
@@ -560,13 +576,19 @@ export default function EditUserPage({ id }: EditUserPageProps) {
                     disabled={isOwner}
                   />
                 </div>
-                <button
-                  type="button"
-                  onClick={onSendPasswordReset}
-                  className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855]"
-                >
-                  Send password reset link
-                </button>
+                <div className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => void onSendPasswordReset()}
+                    disabled={isOwner || isSendingPasswordReset}
+                    className="h-10 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[14px] font-semibold text-[#414855] disabled:opacity-50"
+                  >
+                    {isSendingPasswordReset ? "Applying..." : "Require reset on next login"}
+                  </button>
+                  <p className="text-[11px] text-[#6e7785]">
+                    Calls the server to set the reset flag (no email). Same effect as turning on “Require password reset” above.
+                  </p>
+                </div>
                 <div className="flex items-center justify-between">
                   <span className="text-[14px] font-semibold text-[#363f4c]">
                     Two-factor authentication

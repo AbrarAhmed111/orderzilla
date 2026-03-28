@@ -244,6 +244,9 @@ export default function UsersPage() {
   const [resetPasswordValue, setResetPasswordValue] = useState("");
   const [isResettingPassword, setIsResettingPassword] = useState(false);
 
+  const isUsersFilterLocked =
+    isResetPasswordModalOpen || isCreateModalOpen || isImportModalOpen || isDeleteModalOpen;
+
   const syncQuery = useCallback(
     (patch: Record<string, string | number | undefined>) => {
       const next = new URLSearchParams(searchParams.toString());
@@ -635,12 +638,24 @@ export default function UsersPage() {
           <div className="h-9 flex-1 rounded-lg border border-[#e4e6ea] bg-white px-3 flex items-center gap-2">
             <Search size={15} className="text-[#97a0ad]" />
             <input
-              type="search"
+              id="dashboard-users-table-filter"
+              type="text"
+              inputMode="search"
+              role="searchbox"
+              name="orderzilla_users_filter"
               autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              data-1p-ignore
+              data-lpignore="true"
+              data-bwignore
+              disabled={isUsersFilterLocked}
+              aria-disabled={isUsersFilterLocked}
               placeholder="Search by name or email"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              className="w-full text-[12px] text-[#2f3642] outline-none placeholder:text-[#9aa3ae]"
+              className="w-full text-[12px] text-[#2f3642] outline-none placeholder:text-[#9aa3ae] disabled:cursor-not-allowed disabled:bg-transparent disabled:opacity-60"
             />
           </div>
           <div className="flex flex-wrap items-center gap-2 xl:justify-end">
@@ -1027,37 +1042,63 @@ export default function UsersPage() {
           <div className="w-full max-w-[520px] rounded-xl border border-[#e4e6ea] bg-white p-5 shadow-[0_12px_32px_rgba(0,0,0,0.2)]">
             <h2 className="text-[20px] font-bold text-[#1a212c]">Reset User Password</h2>
             <p className="mt-1 text-[13px] text-[#6e7785]">Set a new temporary password.</p>
-            <ValidatedInput
-              type="password"
-              autoComplete="new-password"
-              name="user-reset-password"
-              value={resetPasswordValue}
-              onChange={setResetPasswordValue}
-              rules={[
-                { type: "required", message: "Password is required." },
-                { type: "minLength", value: 8, message: "Password must be at least 8 characters." },
-              ]}
-              className="mt-4 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px] outline-none focus:border-[#c0eb1a]"
-              placeholder="New password (min 8 chars)"
-            />
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                disabled={isResettingPassword}
-                onClick={() => setIsResetPasswordModalOpen(false)}
-                className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isResettingPassword || !isResetPasswordFormValid}
-                onClick={submitResetPassword}
-                className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
-              >
-                {isResettingPassword ? "Resetting..." : "Reset Password"}
-              </button>
-            </div>
+            <form
+              className="relative mt-4"
+              autoComplete="off"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void submitResetPassword();
+              }}
+            >
+              {/*
+                Absorbs browser/password-manager "username" autofill so it does not target the table filter
+                (which appears earlier in the document and looks like an email field).
+              */}
+              <label htmlFor="dashboard-reset-password-username-decoy" className="sr-only">
+                Account hint (ignored)
+              </label>
+              <input
+                id="dashboard-reset-password-username-decoy"
+                type="text"
+                name="dashboard_reset_password_username_decoy"
+                autoComplete="username"
+                tabIndex={-1}
+                defaultValue=""
+                className="absolute h-px w-px -translate-x-[9999px] overflow-hidden border-0 p-0 opacity-0"
+                aria-hidden="true"
+              />
+              <ValidatedInput
+                id="dashboard-reset-password-new"
+                type="password"
+                autoComplete="new-password"
+                name="new-password"
+                value={resetPasswordValue}
+                onChange={setResetPasswordValue}
+                rules={[
+                  { type: "required", message: "Password is required." },
+                  { type: "minLength", value: 8, message: "Password must be at least 8 characters." },
+                ]}
+                className="mt-3 h-10 w-full rounded-lg border border-[#dfe3e8] px-3 text-[13px] outline-none focus:border-[#c0eb1a]"
+                placeholder="New password (min 8 chars)"
+              />
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={isResettingPassword}
+                  onClick={() => setIsResetPasswordModalOpen(false)}
+                  className="h-9 rounded-lg border border-[#dfe3e8] bg-white px-4 text-[12px] font-semibold text-[#414855] disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isResettingPassword || !isResetPasswordFormValid}
+                  className="h-9 rounded-lg bg-[#d4ff00] px-4 text-[12px] font-semibold text-[#1d2512] disabled:opacity-50"
+                >
+                  {isResettingPassword ? "Resetting..." : "Reset Password"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       ) : null}
